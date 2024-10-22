@@ -111,7 +111,7 @@ def get_arguments(args=None):
 
     # TRAINING
     parser.add_argument('--num_epoch', help='Number of epochs for training', type=int, default=250)
-    parser.add_argument('--num_batch', help='Number of graphs per batch', type=int, default=1)
+    parser.add_argument('--num_batch', help='Number of graphs per batch', type=int, default=3)
     parser.add_argument('--lr', help='Learning rate', type=float, default=0.0003)  # MPNTrack param
     parser.add_argument('--gamma', help='Focal loss gamma parameter', type=float, default=1)
     parser.add_argument('--weight_decay', help='Weight decay', type=float, default=0.0001)  # MPNTrack param

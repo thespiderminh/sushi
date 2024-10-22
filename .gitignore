@@ -10,7 +10,7 @@
 **/**.pyc
 **/__pycache/
 /TrackEval/error_log.txt
-/fast-reid/model_weights
+/fast-reid
 /logs
 /TrackEval/data/
 /TrackEval/data.zip

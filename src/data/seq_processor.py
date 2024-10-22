@@ -205,7 +205,7 @@ class MOTSeqProcessor:
         Assigns a GT identity to every detection in self.det_df, based on the ground truth boxes in self.gt_df.
         The assignment is done frame by frame via bipartite matching.
         So sánh các detection do thuật toán và detection gt, nếu iou > gt_assign_min_iou thì cho 2 id bằng nhau luôn
-        Biết trước bước này, các detection đều có id là -1
+        Biết, trước bước này, các detection đều có id là -1
         """
         if self.det_df.seq_info_dict['has_gt'] and not self.det_df.seq_info_dict['is_gt']:
             print(f"Assigning ground truth identities to detections to sequence {self.seq_name}")

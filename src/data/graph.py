@@ -90,8 +90,8 @@ class HierarchicalGraph(Data):
         self.curr_depth = torch.tensor(0)  # Current hierarchical
 
         # Mapping of nodes from prev layers to the deeper
-        self.maps = []  # All maps
-        self.map_from_init = None  # From initial nodes to the latest layer
+        self.maps = []  # All maps # Chứa tất cả label của các lớp
+        self.map_from_init = None  # From initial nodes to the latest layer # Cập nhật label của lớp trước cho lớp sau
 
     def _one_hot_encode_frames(self):
         """

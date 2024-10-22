@@ -89,8 +89,10 @@ def find_time_valid_connections_flowchunk(node_frames, depth, frames_per_level):
         prev_coverage = frames_per_level[depth-1].item()
 
     # Get changepoints for the larger clusters - current coverage
-    large_clusters = torch.floor((start_frames-min_start_frame)/coverage)  # Cluster the nodes according to their start frames
+    # Phân cụm theo coverage (độ bao phủ), giả sử coverage là 2 thì cứ các detection thuộc 2 frame liên tiếp sẽ gộp lại
+    large_clusters = torch.floor((start_frames-min_start_frame)/coverage) 
     large_cluster_changepoints = torch.where(large_clusters[1:] != large_clusters[:-1])[0] + 1
+    # Thêm 0 vào đầu và số detection vào cuối để tạo các phân cụm bao phủ các detection của "coverage" frames liên tiếp
     large_cluster_changepoints = torch.cat((torch.as_tensor([0]).to(node_frames[0].device), large_cluster_changepoints, torch.as_tensor([start_frames.shape[0]]).to(node_frames[0].device)))
 
     # Sanity check that previous clusters make sense
@@ -99,6 +101,7 @@ def find_time_valid_connections_flowchunk(node_frames, depth, frames_per_level):
 
     # Loop over the large cluster changepoints
     edge_ixs = []
+    # Xét từng cặp liên tiếp trong large_cluster_changepoints
     for large_start_ix, large_end_ix in zip(large_cluster_changepoints[:-1], large_cluster_changepoints[1:]):
         cluster_end_frames = torch.unique(end_frames[large_start_ix:large_end_ix])
         # Loop over the end frames
@@ -307,10 +310,9 @@ def compute_pruning_score(x_reid, x_frame, x_feet, edge_ixs, pruning_method = 'g
 
 
 def compute_edge_features(edge_ixs, node_frames, node_bboxes, node_feets, node_reids, fps, motion_feats={},
-                          edge_feats_to_use=(
-                                             'secs_time_dists', 'norm_feet_x_dists', 'norm_feet_y_dists',
+                          edge_feats_to_use=('secs_time_dists', 'norm_feet_x_dists', 'norm_feet_y_dists',
                                              'bb_height_dists', 'bb_width_dists', 'emb_dists'),
-                                             reid_sim_fn=F.pairwise_distance):
+                          reid_sim_fn=F.pairwise_distance):
     """
     Computes a dictionary of edge features among pairs of detections
 

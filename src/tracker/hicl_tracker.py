@@ -182,14 +182,8 @@ class HICLTracker:
         """
         # print("\nIn _hicl_to_curr()...")
         # Tạo graph batch từ cái phân cấp ban đầu
-        print("hicl_graphs = ", hicl_graphs)
-        print("\ninside \n     ", [hicl_graph.construct_curr_graph_nodes(self.config)
-                                                        for hicl_graph in hicl_graphs])
         batch = Batch.from_data_list([hicl_graph.construct_curr_graph_nodes(self.config)
                                                         for hicl_graph in hicl_graphs])
-        print("batch = ", batch)
-        torch.set_printoptions(threshold=10_000)
-        print("batch.batch = \n", batch.batch)
         
         curr_depth = hicl_graphs[0].curr_depth
         if self.config.do_motion and curr_depth >0:
@@ -206,8 +200,6 @@ class HICLTracker:
         # Now unbatch graphs, add their remaining features, and batch them again
         # Vốn cái batch chỉ là chỗ chứa data, chưa có cấu trúc các cạnh, nên phải thêm cạnh vào chúng
         curr_graphs = Batch.to_data_list(batch)
-        print("curr_graphs = \n", curr_graphs)
-        print()
         curr_graph_batch = Batch.from_data_list([hicl_graph.add_edges_to_curr_graph(self.config, curr_graph)
                                                  for curr_graph, hicl_graph in zip(curr_graphs, hicl_graphs) if ((curr_graph.edge_index is not None) and (curr_graph.edge_index.numel()))])
 
@@ -303,6 +295,7 @@ class HICLTracker:
                                               mode = 'train', 
                                               max_depth = self.active_train_depth, 
                                               project_max_depth = self.active_train_depth - 1)
+            break
 
             # Update the weights
             loss.backward()
@@ -338,7 +331,7 @@ class HICLTracker:
 
         Predict forward and backward future/past locations for each track with length >1"""
 
-        motion_model = self.motion_model
+        motion_model = self.motion_model # Linear motion model
         assert motion_model is not None
 
         fwrd_motion_pred = motion_model(x_motion=batch.x_fwrd_motion, 
@@ -357,7 +350,7 @@ class HICLTracker:
 
     def hicl_forward(self, hicl_graphs, logs, oracle, mode, max_depth, project_max_depth):
         """
-        Đưa hicl_graphs vào, tính toán và đẩy nó lên tầng tiếp theo
+        Đưa hicl_graphs vào, huẩn luyện từng tầng 1
 
         Args:
             hicl_graphs: Các data của Graph (curr_depth, start_frame, end_frame, fps, frames_per_level,
@@ -404,6 +397,7 @@ class HICLTracker:
                 else:
                     # Graph based forward pass
                     outputs = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
+                    print("outputs = ", outputs); print(outputs.shape)
                     
                     # Produce decisions
                     curr_batch.edge_preds = torch.sigmoid(outputs['classified_edges'][-1].view(-1).detach())
@@ -421,11 +415,11 @@ class HICLTracker:
                         
                         logs["Loss_per_Depth"][curr_depth].append(loss_curr_depth.detach().item())  # log the curr loss
 
-            # print("curr_batch.batch = \n", curr_batch.batch)
-            # print("curr_batch.edge_attr = \n", curr_batch.edge_attr)
-            # print("curr_batch.edge_index = \n", curr_batch.edge_index)
-            # print("curr_batch.edge_labels = \n", curr_batch.edge_labels)
-            # print("curr_batch.edge_preds = \n", curr_batch.edge_preds)
+            print("curr_batch.batch = \n", curr_batch.batch)
+            print("curr_batch.edge_attr = \n", curr_batch.edge_attr)
+            print("curr_batch.edge_index = \n", curr_batch.edge_index)
+            print("curr_batch.edge_labels = \n", curr_batch.edge_labels)
+            print("curr_batch.edge_preds = \n", curr_batch.edge_preds)
             graph_data_list = curr_batch.to_data_list()
             if mode != 'train':
                 assert len(graph_data_list) == 1, "Track batch size is greater than 1"
