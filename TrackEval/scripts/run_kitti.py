@@ -39,6 +39,56 @@ from multiprocessing import freeze_support
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import trackeval  # noqa: E402
 
+def evaluate_kitti(tracker_path, split, data_path, tracker_sub_folder, output_sub_folder):
+    """
+    Evaluate KITTI using TrackEval toolkit
+    """
+    # tracker_display_name = 'HICL-Tracker'
+    # --TIME_PROGRESS False
+
+    default_eval_config = trackeval.Evaluator.get_default_eval_config()
+    default_eval_config['DISPLAY_LESS_PROGRESS'] = False
+    default_dataset_config = trackeval.datasets.MotChallenge2DBox.get_default_dataset_config()
+    default_metrics_config = {'METRICS': ['HOTA', 'CLEAR', 'Identity'], 'THRESHOLD': 0.5}
+    config = {**default_eval_config, **default_dataset_config, **default_metrics_config}  # Merge default configs
+    eval_config = {k: v for k, v in config.items() if k in default_eval_config.keys()}
+    dataset_config = {k: v for k, v in config.items() if k in default_dataset_config.keys()}
+    metrics_config = {k: v for k, v in config.items() if k in default_metrics_config.keys()}
+
+
+    # Define your settings
+    dataset = split.split('-')[0].upper()
+    eval_config['PRINT_CONFIG'] = False
+    eval_config['PLOT_CURVES'] = False
+    eval_config['TIME_PROGRESS'] = False
+    eval_config['USE_PARALLEL'] = True
+    metrics_config['PRINT_CONFIG'] = False
+    dataset_config['PRINT_CONFIG'] = False
+
+    dataset_config['SKIP_SPLIT_FOL'] = True
+    dataset_config['TRACKER_DISPLAY_NAMES'] = ['HICL-Tracker']
+
+    dataset_config['TRACKERS_TO_EVAL'] = [tracker_path]
+    if 'dancetrack-val' in split or 'bdd-val' in split:
+        dataset_config['GT_FOLDER'] = os.path.join(data_path, dataset, 'val')
+    else:
+        dataset_config['GT_FOLDER'] = os.path.join(data_path, dataset, 'training')
+    dataset_config['SPLIT_TO_EVAL'] = split
+    dataset_config['SEQMAP_FILE'] = os.path.join(data_path, dataset, 'seqmaps', split+'.txt')
+    dataset_config['TRACKER_SUB_FOLDER'] = tracker_sub_folder
+    dataset_config['OUTPUT_SUB_FOLDER'] = output_sub_folder
+
+    # Run code
+    evaluator = trackeval.Evaluator(eval_config)
+    dataset_list = [trackeval.datasets.Kitti2DBox(dataset_config)]
+    metrics_list = []
+    for metric in [trackeval.metrics.HOTA, trackeval.metrics.CLEAR, trackeval.metrics.Identity, trackeval.metrics.VACE]:
+        if metric.get_name() in metrics_config['METRICS']:
+            metrics_list.append(metric(metrics_config))
+    if len(metrics_list) == 0:
+        raise Exception('No metrics selected for evaluation')
+    return evaluator.evaluate(dataset_list, metrics_list)
+
 if __name__ == '__main__':
     freeze_support()
 

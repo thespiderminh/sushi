@@ -32,9 +32,14 @@ class Postprocessor:
                 partial_traj_df = reixed_traj_df.loc[ped_id].reset_index()
 
                 # Interpolate bb centers, heights and widths
-                full_traj_df = pd.merge(full_traj_df,
-                                        partial_traj_df[['ped_id', 'frame', 'mid_x', 'mid_y', 'bb_height', 'bb_width']],
-                                        how='left', on='frame')
+                if len(self.seq_info_dict['seq']) == 4 and self.seq_info_dict['seq'].isdigit(): # Check if the dataset is kitti
+                    full_traj_df = pd.merge(full_traj_df,
+                                            partial_traj_df[['ped_id', 'frame', 'name', 'mid_x', 'mid_y', 'bb_height', 'bb_width']],
+                                            how='left', on='frame')
+                else:
+                    full_traj_df = pd.merge(full_traj_df,
+                                            partial_traj_df[['ped_id', 'frame', 'mid_x', 'mid_y', 'bb_height', 'bb_width']],
+                                            how='left', on='frame')
                 full_traj_df = full_traj_df.sort_values(by='frame').interpolate()
                 full_traj_dfs.append(full_traj_df)
 

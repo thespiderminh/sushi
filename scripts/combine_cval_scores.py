@@ -1,5 +1,5 @@
 import pandas as pd
-from configs.config import get_arguments
+from configs.mot17_config import get_arguments
 from src.utils.deterministic import make_deterministic
 import os.path as osp
 import matplotlib.pyplot as plt

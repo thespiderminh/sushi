@@ -68,6 +68,17 @@ def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split
     _SPLITS['bdd-val-debug'] = {'BDD/val': [f'{seq_name}' for seq_name in ('b1c66a42-6f7d68ca', 'b1c9c847-3bda4659')]}
 
 
+    ########
+    # KITTI
+    ########
+    _SPLITS['kitti-train-all'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in range(18)]}
+    _SPLITS['kitti-val-all'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in range(18, 21)]}
+    _SPLITS['kitti-train-split1'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (0,)]}
+    _SPLITS['kitti-val-split1'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (4,)]}
+    _SPLITS['kitti-train-split2'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (2,)]}
+    _SPLITS['kitti-val-split2'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (7,)]}
+
+
     # Ensure that split is valid
     assert train_split in _SPLITS.keys() or train_split is None, "Training split is not valid!"
     assert val_split in _SPLITS.keys() or val_split is None, "Validation split is not valid!"

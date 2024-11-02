@@ -61,7 +61,7 @@ def _get_cfg(fastreid_cfg_file, fastreid_model_weights):
 
 def _load_ckpt(model, cfg):
     # Fix keys mismatches due to using different versions!
-    ckpt=torch.load(cfg.MODEL.WEIGHTS, map_location = torch.device("cuda"))
+    ckpt=torch.load(cfg.MODEL.WEIGHTS, map_location = torch.device("cuda:3"))
     state_dict = model.state_dict()
     new_ckpt_model = OrderedDict()
     resave_ckpt=False

@@ -1,4 +1,5 @@
 
+import fnmatch
 import os
 import csv
 import numpy as np
@@ -63,29 +64,9 @@ class Kitti2DBox(_BaseDataset):
                                        'cyclist': 6, 'tram': 7, 'misc': 8, 'dontcare': 9, 'car_2': 1}
 
         # Get sequences to eval and check gt files exist
-        self.seq_list = []
-        self.seq_lengths = {}
-        seqmap_name = 'evaluate_tracking.seqmap.' + self.config['SPLIT_TO_EVAL']
-        seqmap_file = os.path.join(self.gt_fol, seqmap_name)
-        if not os.path.isfile(seqmap_file):
-            raise TrackEvalException('no seqmap found: ' + os.path.basename(seqmap_file))
-        with open(seqmap_file) as fp:
-            dialect = csv.Sniffer().sniff(fp.read(1024))
-            fp.seek(0)
-            reader = csv.reader(fp, dialect)
-            for row in reader:
-                if len(row) >= 4:
-                    seq = row[0]
-                    self.seq_list.append(seq)
-                    self.seq_lengths[seq] = int(row[3])
-                    if not self.data_is_zipped:
-                        curr_file = os.path.join(self.gt_fol, 'label_02', seq + '.txt')
-                        if not os.path.isfile(curr_file):
-                            raise TrackEvalException('GT file not found: ' + os.path.basename(curr_file))
-            if self.data_is_zipped:
-                curr_file = os.path.join(self.gt_fol, 'data.zip')
-                if not os.path.isfile(curr_file):
-                    raise TrackEvalException('GT file not found: ' + os.path.basename(curr_file))
+        self.seq_list, self.seq_lengths = self._get_seq_info()
+        if len(self.seq_list) < 1:
+            raise TrackEvalException('No sequences are selected to be evaluated.')
 
         # Get trackers to eval
         if self.config['TRACKERS_TO_EVAL'] is None:
@@ -116,6 +97,37 @@ class Kitti2DBox(_BaseDataset):
 
     def get_display_name(self, tracker):
         return self.tracker_to_disp[tracker]
+
+    def _get_seq_info(self):
+        seq_list = []
+        seq_lengths = {}
+        seqmap_file = self.config['SEQMAP_FILE']
+        if not os.path.isfile(seqmap_file):
+            raise TrackEvalException('no seqmap found: ' + os.path.basename(seqmap_file))
+        with open(seqmap_file) as fp:
+            reader = csv.reader(fp)
+            for i, row in enumerate(reader):
+                if i == 0 or row[0] == '':
+                    continue
+                seq = row[0]
+                seq_list.append(seq)
+                # Get num_frame in seq
+                num_frame = 0
+                seq_path = os.path.join(self.gt_fol, "image_02", seq)
+                for root, dirs, files in os.walk(seq_path):
+                    for file in files:
+                        if fnmatch.fnmatch(file, "*.png"):
+                            num_frame += 1
+                seq_lengths[seq] = num_frame
+                if not self.data_is_zipped:
+                    curr_file = os.path.join(self.gt_fol, 'label_02', seq + '.txt')
+                    if not os.path.isfile(curr_file):
+                        raise TrackEvalException('GT file not found: ' + os.path.basename(curr_file))
+            if self.data_is_zipped:
+                curr_file = os.path.join(self.gt_fol, 'data.zip')
+                if not os.path.isfile(curr_file):
+                    raise TrackEvalException('GT file not found: ' + os.path.basename(curr_file))
+        return seq_list, seq_lengths
 
     def _load_raw_file(self, tracker, seq, is_gt):
         """Load a file (gt or tracker) in the kitti 2D box format

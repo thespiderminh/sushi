@@ -1,3 +1,4 @@
+import argparse
 import os.path as osp
 import pandas as pd
 import configparser
@@ -123,3 +124,12 @@ def get_mot_gt(seq_name, data_root_path, config):
     gt_df['bb_right'] = (gt_df['bb_left'] + gt_df['bb_width']).values
 
     return gt_df
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    config = parser.parse_args()
+    config.det_file = 'det'
+    a, b = get_mot_det_df_from_det(seq_name="MOT17-04-SDP", data_root_path="/data/hpc/ngocminh/SUSHI/datasets/MOT17/train", config=config)
+    print(a)
+    print(b)
+    

@@ -7,6 +7,7 @@ from src.models.hiclnet import HICLNet
 from src.models.motion.linear import LinearMotionModel
 from src.utils.deterministic import seed_worker, seed_generator
 from src.data.mot_datasets import MOTSceneDataset
+from src.data.kitti_datasets import KITTISceneDataset
 from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 import torch
@@ -24,11 +25,16 @@ import time
 import statistics
 import os
 from TrackEval.scripts.run_mot_challenge import evaluate_mot17
+from TrackEval.scripts.run_kitti import evaluate_kitti
 import matplotlib.pyplot as plt
 from torch import nn
 import math
 import pickle
 from torch.utils.tensorboard.writer import SummaryWriter
+
+_EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti}
+_METRICS_FUNC = {'mot17': 'MotChallenge2DBox', 'kitti': 'Kitti2DBox'}
+_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset}
 
 class HICLTracker:
     """
@@ -38,6 +44,11 @@ class HICLTracker:
         self.config = config
         self.seqs = seqs
         self.train_split, self.val_split, self.test_split = splits
+
+        # Load function for each dataset
+        self.eval_func = _EVAL_FUNC[self.config.run_id[:5]]
+        self.metrics_func = _METRICS_FUNC[self.config.run_id[:5]]
+        self.dataset_func = _DATASET_FUNC[self.config.run_id[:5]]
 
         # Load the model (currently MPNTrack)
         self.model = self._get_model()
@@ -107,7 +118,7 @@ class HICLTracker:
         """
         Create dataset objects
         """
-        return MOTSceneDataset(config=self.config, seqs=self.seqs[mode], mode=mode)
+        return self.dataset_func(config=self.config, seqs=self.seqs[mode], mode=mode)
 
     def _get_train_dataloader(self):
         """
@@ -180,7 +191,6 @@ class HICLTracker:
         3) Use those motion features, as well as reid to define KNN edges and define 
         edge features for each graph in the batch to obtain the final graphs
         """
-        # print("\nIn _hicl_to_curr()...")
         # Tạo graph batch từ cái phân cấp ban đầu
         batch = Batch.from_data_list([hicl_graph.construct_curr_graph_nodes(self.config)
                                                         for hicl_graph in hicl_graphs])
@@ -264,19 +274,6 @@ class HICLTracker:
         logs = {"Loss": [], "Loss_per_Depth": [[] for j in range(self.config.hicl_depth)], "Time": []}
 
         for i, train_batch in enumerate(self.train_dataloader):
-            # print("i = ", i)
-            # print("train_batch = ", train_batch)
-            # print("train_batch bao gồm:")
-            # print("     curr_depth = ", train_batch.curr_depth)
-            # print("     end_frame = ", train_batch.end_frame)
-            # print("     frames_per_level = ", train_batch.frames_per_level)
-            # print("     x_bbox = ", train_batch.x_bbox)
-            # print("     x_center = ", train_batch.x_center)
-            # print("     x_feet = ", train_batch.x_feet)
-            # print("     x_frame = ", train_batch.x_frame)
-            # print("     x_reid = ", train_batch.x_reid)
-            # print("     x_node = ", train_batch.x_node)
-            # print("     y_id = ", train_batch.y_id)
             t_start = time.time()
 
             # Iteration update
@@ -295,7 +292,6 @@ class HICLTracker:
                                               mode = 'train', 
                                               max_depth = self.active_train_depth, 
                                               project_max_depth = self.active_train_depth - 1)
-            break
 
             # Update the weights
             loss.backward()
@@ -361,18 +357,13 @@ class HICLTracker:
                     - Nếu oracle==False thì phải dùng MPNTrack để tính xem correct hay incorrect
             mode: train, val hoặc test
             max_depth: Số cấp bậc tối đa của Hierarchical Graph được dùng đến, default là 9
-
-        Return:
-            Một hicl_graphs của bậc tiếp theo
         """
-        print("In hicl_forward()")
         hicl_feats=None
         loss = torch.as_tensor([.0], device=self.config.device)  # Initialize the batch loss
         
         # Với mỗi cấp bậc
         for curr_depth in range(max_depth):
         
-            print("Với cấp bậc ", curr_depth, "/", max_depth, " trong hicl_graph, tạo curr_graphs từ cái hierarachical graphs")
             # Put the graph into the correct format
             curr_batch, _ = self._hicl_to_curr(hicl_graphs=hicl_graphs)  # Create curr_graphs from hierarachical graphs            
             batch_idx = curr_batch.batch
@@ -397,7 +388,6 @@ class HICLTracker:
                 else:
                     # Graph based forward pass
                     outputs = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
-                    print("outputs = ", outputs); print(outputs.shape)
                     
                     # Produce decisions
                     curr_batch.edge_preds = torch.sigmoid(outputs['classified_edges'][-1].view(-1).detach())
@@ -408,6 +398,7 @@ class HICLTracker:
                         # Calculate batch classification metrics and loss
                         logs[curr_depth] = self._calculate_true_false_metrics(edge_preds=curr_batch.edge_preds,
                                                                     edge_labels=curr_batch.edge_labels, logs=logs[curr_depth])
+                        print("logs[curr_depth] = ", logs[curr_depth])
                     elif mode == 'train':
                         # Calculate loss and prepare for a forward pass
                         loss_curr_depth = self._calculate_loss(outputs=outputs, edge_labels=curr_batch.edge_labels, edge_mask=curr_batch.edge_mask)                          
@@ -415,11 +406,6 @@ class HICLTracker:
                         
                         logs["Loss_per_Depth"][curr_depth].append(loss_curr_depth.detach().item())  # log the curr loss
 
-            print("curr_batch.batch = \n", curr_batch.batch)
-            print("curr_batch.edge_attr = \n", curr_batch.edge_attr)
-            print("curr_batch.edge_index = \n", curr_batch.edge_index)
-            print("curr_batch.edge_labels = \n", curr_batch.edge_labels)
-            print("curr_batch.edge_preds = \n", curr_batch.edge_preds)
             graph_data_list = curr_batch.to_data_list()
             if mode != 'train':
                 assert len(graph_data_list) == 1, "Track batch size is greater than 1"
@@ -480,11 +466,11 @@ class HICLTracker:
 
     def _log_tb_mot_metrics(self, mot_metrics):
         if self.logger is not None:
-            path = list(mot_metrics['MotChallenge2DBox'].keys())[0]
+            path = list(mot_metrics[self.metrics_func].keys())[0]
             _METRICS_GROUPS = ['HOTA', 'CLEAR', 'Identity']
             _METRICS_TO_LOG = ['HOTA','AssA', 'DetA', 'MOTA', 'IDF1']
 
-            metrics_ = mot_metrics['MotChallenge2DBox'][path]['COMBINED_SEQ']['pedestrian'] # We may need more classes for MOTCha
+            metrics_ = mot_metrics[self.metrics_func][path]['COMBINED_SEQ']['pedestrian'] # We may need more classes for MOTCha
             for metrics_group_name in _METRICS_GROUPS:
                 group_metrics = metrics_[metrics_group_name]
                 for metric_name, metric_val in group_metrics.items():
@@ -502,10 +488,10 @@ class HICLTracker:
 
         # First calculate the oracle results for validation
         # Kiếm tra chất lượng của mô hình trước khi huấn luyện + kiểm tra việc xử lý data
-        # if self.val_split:
-        if False:
+        if self.val_split:
+        # if False:
             _, _ = self.track(self.val_dataset, output_path=osp.join(self.config.experiment_path, 'oracle'), mode='val', oracle=True)
-            evaluate_mot17(tracker_path=osp.join(self.config.experiment_path, 'oracle'), split=self.val_split,
+            self.eval_func(tracker_path=osp.join(self.config.experiment_path, 'oracle'), split=self.val_split,
                            data_path=self.config.data_path, tracker_sub_folder=self.config.mot_sub_folder,
                            output_sub_folder=self.config.mot_sub_folder)
         #raise RuntimeError
@@ -550,7 +536,7 @@ class HICLTracker:
                 self._log_tb_class_metrics(epoch_val_logs, epoc_val_logs_per_depth)
 
                 # MOT metrics
-                mot_metrics= evaluate_mot17(tracker_path=epoch_path, split=self.val_split, data_path=self.config.data_path,
+                mot_metrics= self.eval_func(tracker_path=epoch_path, split=self.val_split, data_path=self.config.data_path,
                                             tracker_sub_folder=self.config.mot_sub_folder, output_sub_folder=self.config.mot_sub_folder)[0]
                 self._log_tb_mot_metrics(mot_metrics) 
 
@@ -570,7 +556,6 @@ class HICLTracker:
         """
         Main tracking method. Given a dataset, track every sequence in it and create output files.
         Track mỗi video được đưa vào qua dataset, và đẩy output ra
-        Output gồm TODO
         """
 
         # Set the model in the test mode
@@ -586,12 +571,10 @@ class HICLTracker:
 
             # Loop over sequences
             for seq, seq_and_frames in dataset.sparse_frames_per_seq.items():
-                print("Với mỗi video:")
                 print("Tracking", seq)
                 # Loop over each datapoint - Equivalent to using a dataloader with batch 1
                 seq_dfs = []
                 for seq_name, start_frame, end_frame in seq_and_frames:
-                    print("Với mỗi đoạn có độ dài 512 frames, cách nhau 20 frames trong 1 video:")
                     # Equivalent to train_batch with a single datapoint
                     # Tạo 1 cái graph cho 1 lần train 512 frames,
                     # data là cái HierarchicalGraph chứa embedding ngoại hình của các detection, số frame, bounding box của chúng
@@ -758,6 +741,11 @@ class HICLTracker:
         logs["TN"].append(TN.item())
         logs["FN"].append(FN.item())
 
+        # print("TP.item() = ", TP.item())
+        # print("FP.item() = ", FP.item())
+        # print("TN.item() = ", TN.item())
+        # print("FN.item() = ", FN.item())
+
         return logs
 
     def _postprocess_logs(self, logs):
@@ -847,6 +835,7 @@ class HICLTracker:
         """
         Save the tracking output df
         """
+        pd.options.mode.chained_assignment = None  # Tắt hoàn toàn cảnh báo
         df['conf'] = 1
         df['x'] = -1
         df['y'] = -1
