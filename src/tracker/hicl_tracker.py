@@ -398,7 +398,6 @@ class HICLTracker:
                         # Calculate batch classification metrics and loss
                         logs[curr_depth] = self._calculate_true_false_metrics(edge_preds=curr_batch.edge_preds,
                                                                     edge_labels=curr_batch.edge_labels, logs=logs[curr_depth])
-                        print("logs[curr_depth] = ", logs[curr_depth])
                     elif mode == 'train':
                         # Calculate loss and prepare for a forward pass
                         loss_curr_depth = self._calculate_loss(outputs=outputs, edge_labels=curr_batch.edge_labels, edge_mask=curr_batch.edge_mask)                          
@@ -517,12 +516,15 @@ class HICLTracker:
 
             # Train loss logs
             logs["Train_Loss"].append(statistics.mean(epoch_train_logs["Loss"]))
+            logs["Val_Loss"].append(0.)
             for j in range(self.config.hicl_depth):
                 # If a layer is frozen, set the loss to 0
                 if j < self.active_train_depth and len(epoch_train_logs["Loss_per_Depth"][j]) > 0:
                     logs["Train_Loss_per_Depth"][j].append(statistics.mean(epoch_train_logs["Loss_per_Depth"][j]))
+                    logs["Val_Loss_per_Depth"][j].append(0.)
                 else:
                     logs["Train_Loss_per_Depth"][j].append(0.)
+                    logs["Val_Loss_per_Depth"][j].append(0.)
 
             # Validation steps
             if self.val_split and epoch >= self.config.start_eval:

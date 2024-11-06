@@ -19,8 +19,8 @@ def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split
     _SPLITS['mot17-val-split2'] = {'MOT17/train': [f'MOT17-{seq_num:02}-{det}' for seq_num in (4, 11) for det in mot17_dets]}
     _SPLITS['mot17-train-split3'] = {'MOT17/train': [f'MOT17-{seq_num:02}-{det}' for seq_num in (2, 4, 10, 11, 13) for det in mot17_dets]}
     _SPLITS['mot17-val-split3'] = {'MOT17/train': [f'MOT17-{seq_num:02}-{det}' for seq_num in (5, 9) for det in mot17_dets]}
-    _SPLITS['mot17-train-split4'] = {'MOT17/train': [f'MOT17-{seq_num:02}-{det}' for seq_num in (2,) for det in mot17_dets]}
-    _SPLITS['mot17-val-split4'] = {'MOT17/train': [f'MOT17-{seq_num:02}-{det}' for seq_num in (4,) for det in mot17_dets]}
+    _SPLITS['mot17-train-split4'] = {'MOT17/train': [f'MOT17-{seq_num:02}-{det}' for seq_num in (4,) for det in mot17_dets]}
+    _SPLITS['mot17-val-split4'] = {'MOT17/train': [f'MOT17-{seq_num:02}-{det}' for seq_num in (2,) for det in mot17_dets]}
 
     # MOT 17 test set
     _SPLITS['mot17-test-all'] = {
@@ -76,7 +76,7 @@ def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split
     _SPLITS['kitti-train-split1'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (0,)]}
     _SPLITS['kitti-val-split1'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (4,)]}
     _SPLITS['kitti-train-split2'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (2,)]}
-    _SPLITS['kitti-val-split2'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (7,)]}
+    _SPLITS['kitti-val-split2'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (0,)]}
 
 
     # Ensure that split is valid

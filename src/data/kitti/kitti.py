@@ -7,7 +7,7 @@ import cv2
 
 
 # Detection and ground truth file formats for MOT17
-DET_COL_NAMES = ('frame', 'id', 'name', 'use1?', 'use2?', 'direction', 'bb_left', 'bb_top', 'bb_right', 'bb_bottom', 'x', 'y', 'z', 'xx', 'yy', 'zz', 'cam')
+DET_COL_NAMES = ('frame', 'id', 'name', 'truncation', 'occlusion', 'direction', 'bb_left', 'bb_top', 'bb_right', 'bb_bottom', 'x', 'y', 'z', 'xx', 'yy', 'zz', 'cam')
 
 
 def get_kitti_det_df(seq_name, data_root_path, config):
@@ -48,16 +48,10 @@ def get_kitti_det_df(seq_name, data_root_path, config):
     det_df['bb_width'] = det_df['bb_width'].round(1)
     det_df['bb_height'] = det_df['bb_height'].round(1)
 
-    # Delete unused columns
-    det_df = det_df.drop(columns=['use1?', 'use2?', 'direction', 'bb_right', 'bb_bottom', 'x', 'y', 'z', 'xx', 'yy', 'zz', 'cam'])
-
     # Get images' shape
     first_image_path = det_df.loc[0, 'frame_path']
     first_image = cv2.imread(first_image_path)
     height, width, layers = first_image.shape
-
-    # Detele unused detetions
-    det_df = det_df[det_df['name'] != 'DontCare']
 
     # Build scene info dictionary
     seq_info_dict = {'seq': seq_name,

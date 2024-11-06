@@ -170,6 +170,8 @@ class MOTSeqProcessor:
         self.det_df, seq_info_dict = self.det_df_loader(self.seq_name, self.dataset_path, self.config)
         if seq_info_dict['has_gt']:
             self.gt_df = self.gt_df_loader(self.seq_name, self.dataset_path, self.config)
+        else:
+            self.gt_df = self.det
 
         # Copy the dataframe into our class
         self.det_df = DataFrameWSeqInfo(self.det_df)

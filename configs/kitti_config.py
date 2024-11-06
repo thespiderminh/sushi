@@ -117,7 +117,7 @@ def get_arguments(args=None):
     parser.add_argument('--weight_decay', help='Weight decay', type=float, default=0.0001)  # MPNTrack param
     parser.add_argument('--augmentation', help='Perform data augmentation during training', dest='augmentation', action='store_true')
     parser.add_argument('--train_dataset_frame_overlap', help='Most frames to overlap for different datapoints', type=int, default=20)
-    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=20) # Don't start evaluating bf all layers are unfrozen!
+    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=22) # Don't start evaluating bf all layers are unfrozen!
     parser.add_argument('--no_fp_loss', help='Do not compute a loss for FPs', dest='no_fp_loss', action='store_true', default=False) 
 
 
@@ -195,8 +195,8 @@ def post_config(config):
     config = create_experiment_path(config)
 
     # Dataframe Columns to keep in order to produce a tracking output
-    config.VIDEO_COLUMNS = ['frame_path', 'frame', 'name', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'bb_right', 'bb_bot']  # Columns to save in the output df
-    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'name', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'conf', 'x', 'y', 'z']  # MotCha output format
+    config.VIDEO_COLUMNS = ['frame_path', 'frame', 'name', 'truncation', 'occlusion', 'direction', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'bb_right', 'bb_bot']  # Columns to save in the output df
+    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'name', 'truncation', 'occlusion', 'direction', 'bb_left', 'bb_top', 'bb_right', 'bb_bot', 'conf', 'x', 'y', 'z']  # MotCha output format
 
     # Motion things
     config.do_motion = max(config.mpn_use_motion)

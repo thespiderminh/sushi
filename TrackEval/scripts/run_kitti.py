@@ -48,7 +48,7 @@ def evaluate_kitti(tracker_path, split, data_path, tracker_sub_folder, output_su
 
     default_eval_config = trackeval.Evaluator.get_default_eval_config()
     default_eval_config['DISPLAY_LESS_PROGRESS'] = False
-    default_dataset_config = trackeval.datasets.MotChallenge2DBox.get_default_dataset_config()
+    default_dataset_config = trackeval.datasets.Kitti2DBox.get_default_dataset_config()
     default_metrics_config = {'METRICS': ['HOTA', 'CLEAR', 'Identity'], 'THRESHOLD': 0.5}
     config = {**default_eval_config, **default_dataset_config, **default_metrics_config}  # Merge default configs
     eval_config = {k: v for k, v in config.items() if k in default_eval_config.keys()}
