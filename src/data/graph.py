@@ -147,6 +147,23 @@ class HierarchicalGraph(Data):
             # Obtain new node ids from initials
             y_id = assign_node_ids(init_node_ids=self.y_id, map_from_init=self.map_from_init,
                                    threshold=config.node_id_min_ratio)
+            
+            unique_id = y_id.unique()
+            label_mapping = {label.item(): i for i, label in enumerate(unique_id)}
+            y_id = torch.tensor([label_mapping[label.item()] for label in y_id]).to(x_frame[0].device)
+            
+            # torch.set_printoptions(linewidth=200)
+            # print()
+            # print("self.curr_depth = ", self.curr_depth)
+            # for i in range(len(self.x_frame)):
+            #     print("i = ", i, "   self.x_frame = ", self.x_frame[i].item(), "   self.map_from_init = ", self.map_from_init[i].item(), end='      ')
+            # a, b = x_frame
+            # for i in range(len(a)):
+            #     if abs(a[i] - b[i]) > 2 ** self.curr_depth:
+            #         print()
+            #         print("Huhu")
+            #         print(i)
+            #         print(a[i], b[i])
 
         return x_node, x_reid, x_frame, x_frame_mask, x_bbox, x_feet, x_center, y_id
 
@@ -223,11 +240,6 @@ class HierarchicalGraph(Data):
 
     def construct_curr_graph_nodes(self, config):
         # Get current level features and labels
-        # print("In construct_curr_graph_nodes()...")
-        # print("self.x_node = ", self.x_node.size(), "\n", self.x_node)
-        # print("self.curr_depth = ", self.curr_depth, "\n", self.curr_depth.size())
-        # if self.map_from_init != None:
-        #     print("self.map_from_init = ", self.map_from_init, "\n", self.map_from_init.size())
         x_node, x_reid, x_frame, x_frame_mask, x_bbox, x_feet, x_center, y_id = self._get_curr_graph_specs(config)
 
         #if config.zero_nodes:
@@ -253,6 +265,10 @@ class HierarchicalGraph(Data):
                                                      depth=self.curr_depth, frames_per_level=self.frames_per_level, 
                                                      connectivity=config.connectivity)
 
+        if x_bbox[0].shape == torch.Size([4]):
+            x_center = ( x_center[0].unsqueeze(0), x_center[1].unsqueeze(0) )
+            x_bbox = ( x_bbox[0].unsqueeze(0), x_bbox[1].unsqueeze(0) )
+            x_feet = ( x_feet[0].unsqueeze(0), x_feet[1].unsqueeze(0) )
         curr_graph = Graph(x=x_node, edge_index=raw_edge_index, x_reid=x_reid,y_id=y_id,  
                             fwrd_vel=fwrd_vel, bwrd_vel=bwrd_vel, 
                             x_frame_start=x_frame[0], x_frame_end=x_frame[1],

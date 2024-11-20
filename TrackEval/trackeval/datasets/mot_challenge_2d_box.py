@@ -335,18 +335,15 @@ class MotChallenge2DBox(_BaseDataset):
         num_gt_dets = 0
         num_tracker_dets = 0
         for t in range(raw_data['num_timesteps']):
-            print("Với frame ", t, " ta có:")
 
             # Get all data
             gt_ids = raw_data['gt_ids'][t]
             gt_dets = raw_data['gt_dets'][t]
-            print("gt_dets = ", gt_dets)
             gt_classes = raw_data['gt_classes'][t]
             gt_zero_marked = raw_data['gt_extras'][t]['zero_marked']
 
             tracker_ids = raw_data['tracker_ids'][t]
             tracker_dets = raw_data['tracker_dets'][t]
-            print("tracker_dets = ", tracker_dets)
             tracker_classes = raw_data['tracker_classes'][t]
             tracker_confidences = raw_data['tracker_confidences'][t]
             similarity_scores = raw_data['similarity_scores'][t]
@@ -375,7 +372,6 @@ class MotChallenge2DBox(_BaseDataset):
 
                 matching_scores = similarity_scores.copy()
                 matching_scores[matching_scores < 0.5 - np.finfo('float').eps] = 0
-                print("matching_scores 22222 = ", matching_scores)
                 match_rows, match_cols = linear_sum_assignment(-matching_scores)
                 actually_matched_mask = matching_scores[match_rows, match_cols] > 0 + np.finfo('float').eps
                 match_rows = match_rows[actually_matched_mask]

@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from configs import mot17_config, kitti_config
+from configs import mot17_config, kitti_config, refer_kitti_config
 from src.utils.deterministic import make_deterministic
 from src.tracker.hicl_tracker import HICLTracker
 from src.data.splits import get_seqs_from_splits
@@ -10,48 +10,12 @@ from TrackEval.scripts.run_mot_challenge import evaluate_mot17
 import time
 import torch
 
-'''
-def change_dataset_format(config):
-    kitti_path = os.path.join(config.data_path, "KITTI/training/image_02/0000/det")
-    label_path = os.path.join(config.data_path, "KITTI/labels_with_ids/image_02")
-
-    if not os.path.isdir(kitti_path):
-        image_02_path = os.path.dirname(os.path.dirname(kitti_path)) # /.../image_02
-
-        # Đếm số seq
-        items = os.listdir(image_02_path) # Lấy tất cả items
-        folders = [item for item in items if os.path.isdir(os.path.join(image_02_path, item))] # Lọc các phần tử là folder
-        num_seqs = len(folders)
-
-        # Đổi từng seq về MOT format
-        for i in range(num_seqs):
-            # Đẩy các ảnh trong seq vào 1 folder tên là img, dọn chỗ cho det
-            seq_name = str(i).zfill(4)
-            seq_path = os.path.join(image_02_path, seq_name)
-
-            destination_folder = os.path.join(seq_path, "img")
-            os.makedirs(destination_folder, exist_ok=True)
-            for file in os.listdir(seq_path):
-                if file.endswith(".png"):
-                    source_file = os.path.join(seq_path, file)
-                    destination_file = os.path.join(destination_folder, file)
-                    os.rename(source_file, destination_file)
-
-            
-            # Lấy detections sang
-            source_folder = os.path.join(label_path, seq_name)
-            destination_folder = os.path.join(seq_path, "det")
-            os.rename(source_folder, destination_folder)
-
-        # Xoá label_folder cũ
-        os.rmdir(label_path)
-        os.rmdir(os.path.dirname(label_path))
-'''
-
 if __name__ == "__main__":
     run_id = os.getenv('RUN')
     if run_id.startswith('kitti_'):
         config = kitti_config.get_arguments()
+    elif run_id.startswith('refer_'):
+        config = refer_kitti_config.get_arguments()
     elif run_id.startswith('mot17_'):
         config = mot17_config.get_arguments()  # Get hyperparameters
 

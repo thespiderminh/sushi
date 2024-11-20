@@ -79,6 +79,15 @@ def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split
     _SPLITS['kitti-val-split2'] = {'KITTI/training/image_02': [f'00{seq_num:02}' for seq_num in (0,)]}
 
 
+    ########
+    # Refer-KITTI
+    ########
+    _SPLITS['refer-kitti-train-all'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in range(1, 18)]}
+    _SPLITS['refer-kitti-val-all'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in range(18, 21)]}
+    _SPLITS['refer-kitti-train-split2'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (2,)]}
+    _SPLITS['refer-kitti-val-split2'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (1,)]}
+
+
     # Ensure that split is valid
     assert train_split in _SPLITS.keys() or train_split is None, "Training split is not valid!"
     assert val_split in _SPLITS.keys() or val_split is None, "Validation split is not valid!"

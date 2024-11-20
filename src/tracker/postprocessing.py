@@ -35,12 +35,12 @@ class Postprocessor:
                 if len(self.seq_info_dict['seq']) == 4 and self.seq_info_dict['seq'].isdigit(): # Check if the dataset is kitti
                     full_traj_df = pd.merge(full_traj_df,
                                             partial_traj_df[['ped_id', 'frame', 'name', 'truncation', 'occlusion', 'direction', 'mid_x', 'mid_y', 'bb_height', 'bb_width']],
-                                            how='left', on='frame')
+                                            how='right', on='frame')
                     full_traj_df = full_traj_df.dropna(subset=['name'])
                 else:
                     full_traj_df = pd.merge(full_traj_df,
                                             partial_traj_df[['ped_id', 'frame', 'mid_x', 'mid_y', 'bb_height', 'bb_width']],
-                                            how='left', on='frame')
+                                            how='right', on='frame')
                 full_traj_df = full_traj_df.sort_values(by='frame').interpolate()
                 full_traj_dfs.append(full_traj_df)
 

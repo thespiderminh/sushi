@@ -8,6 +8,7 @@ from src.models.motion.linear import LinearMotionModel
 from src.utils.deterministic import seed_worker, seed_generator
 from src.data.mot_datasets import MOTSceneDataset
 from src.data.kitti_datasets import KITTISceneDataset
+from src.data.refer_kitti_datasets import ReferKITTISceneDataset
 from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 import torch
@@ -26,15 +27,16 @@ import statistics
 import os
 from TrackEval.scripts.run_mot_challenge import evaluate_mot17
 from TrackEval.scripts.run_kitti import evaluate_kitti
+from TrackEval.scripts.run_refer_kitti import evaluate_refer_kitti
 import matplotlib.pyplot as plt
 from torch import nn
 import math
 import pickle
 from torch.utils.tensorboard.writer import SummaryWriter
 
-_EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti}
-_METRICS_FUNC = {'mot17': 'MotChallenge2DBox', 'kitti': 'Kitti2DBox'}
-_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset}
+_EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti, 'refer': evaluate_refer_kitti}
+_METRICS_FUNC = {'mot17': 'MotChallenge2DBox', 'kitti': 'Kitti2DBox', 'refer': 'ReferKitti2DBox'}
+_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': ReferKITTISceneDataset}
 
 class HICLTracker:
     """
@@ -210,10 +212,26 @@ class HICLTracker:
         # Now unbatch graphs, add their remaining features, and batch them again
         # Vốn cái batch chỉ là chỗ chứa data, chưa có cấu trúc các cạnh, nên phải thêm cạnh vào chúng
         curr_graphs = Batch.to_data_list(batch)
-        curr_graph_batch = Batch.from_data_list([hicl_graph.add_edges_to_curr_graph(self.config, curr_graph)
-                                                 for curr_graph, hicl_graph in zip(curr_graphs, hicl_graphs) if ((curr_graph.edge_index is not None) and (curr_graph.edge_index.numel()))])
+        data_list = []
+        unfit_batch = []
+        fit_batch = []
+        convert_batch = {}
+        for _, a in enumerate(zip(curr_graphs, hicl_graphs)):
+            curr_graph, hicl_graph = a
+            if ((curr_graph.edge_index is not None) and (curr_graph.edge_index.numel())):
+                data_list.append(hicl_graph.add_edges_to_curr_graph(self.config, curr_graph))
+                fit_batch.append(_)
+            else:
+                unfit_batch.append(_)
 
-        return curr_graph_batch, motion_pred
+        for i in range(len(fit_batch)):
+            convert_batch[i] = fit_batch[i]
+                
+        curr_graph_batch = Batch.from_data_list(data_list)
+        # curr_graph_batch = Batch.from_data_list([hicl_graph.add_edges_to_curr_graph(self.config, curr_graph)
+        #                                          for curr_graph, hicl_graph in zip(curr_graphs, hicl_graphs) if ((curr_graph.edge_index is not None) and (curr_graph.edge_index.numel()))])
+
+        return curr_graph_batch, unfit_batch, convert_batch, motion_pred
 
     def _postprocess_graph(self, graph, remove_negatives=True, decision_threshold=0.5):
         """
@@ -365,7 +383,7 @@ class HICLTracker:
         for curr_depth in range(max_depth):
         
             # Put the graph into the correct format
-            curr_batch, _ = self._hicl_to_curr(hicl_graphs=hicl_graphs)  # Create curr_graphs from hierarachical graphs            
+            curr_batch, unfit_batch, convert_batch, _ = self._hicl_to_curr(hicl_graphs=hicl_graphs)  # Create curr_graphs from hierarachical graphs      
             batch_idx = curr_batch.batch
 
             if curr_depth == 0 or not self.config.do_hicl_feats:
@@ -427,11 +445,13 @@ class HICLTracker:
                             hicl_feats.append(self.model.layers[curr_depth].hicl_feats_encoder.pool_node_feats(outputs['node_feats'][node_mask], labels))
 
                         # Update the hierarchical graphs with new map_from_init and depth
-                        hicl_graphs[ix_graph].update_maps_and_depth(labels)
+                        hicl_graphs[convert_batch[ix_graph]].update_maps_and_depth(labels)
 
                     else:
                         # Update the hierarchical graphs
-                        hicl_graphs[ix_graph].update_maps_and_depth_wo_labels()
+                        hicl_graphs[convert_batch[ix_graph]].update_maps_and_depth_wo_labels()
+                for i in unfit_batch:
+                    hicl_graphs[i].update_maps_and_depth_wo_labels()
             
             if len(hicl_feats) > 0:
                 hicl_feats = torch.cat(hicl_feats)
@@ -469,7 +489,8 @@ class HICLTracker:
             _METRICS_GROUPS = ['HOTA', 'CLEAR', 'Identity']
             _METRICS_TO_LOG = ['HOTA','AssA', 'DetA', 'MOTA', 'IDF1']
 
-            metrics_ = mot_metrics[self.metrics_func][path]['COMBINED_SEQ']['pedestrian'] # We may need more classes for MOTCha
+            cls = mot_metrics[self.metrics_func][path]['COMBINED_SEQ'].keys()
+            metrics_ = mot_metrics[self.metrics_func][path]['COMBINED_SEQ'][list(cls)[0]] # We may need more classes for MOTCha
             for metrics_group_name in _METRICS_GROUPS:
                 group_metrics = metrics_[metrics_group_name]
                 for metric_name, metric_val in group_metrics.items():
