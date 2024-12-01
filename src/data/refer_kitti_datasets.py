@@ -24,13 +24,13 @@ class ReferKITTISceneDataset:
         # :seq_info_dicts: Df của các thông tin về video (tên seq, seq_path, det_file_name, frame_height, frame_width, fpx,...)
         # :seq_names: Tên của seq (VD: 'MOT17-02-SDP')
         # Đồng thời tạo mục processed_data trong dataset, lưu những data đã xử lý
-        self.seq_det_dfs, self.seq_info_dicts, self.seq_names = self._load_seq_dfs()
+        self.seq_det_dfs, self.seq_info_dicts, self.seq_names, self.text_dicts = self._load_seq_dfs()
 
         # Index dataset
         # Do 512 frame sẽ được sử dụng trong 1 graph, nên phải lấy những tập chứa đúng 512 frames có thể đưa vào
         # Mỗi lần sẽ cách ra 1 khoảng config.train_dataset_frame_overlap (default: 20)
         # (VD: (1, 512), (21, 532), (41, 552), ...)
-        self.seq_and_frames = self._index_dataset()
+        self.seq_with_frames_and_text = self._index_dataset()
 
         # Sparse index per sequence for val and test datasets
         # Tương tự như _index_dataset, tuy nhiên mỗi tập sẽ chồng lấn lên nhau một tỉ lệ bằng config.evaluation_graph_overlap_ratio (default: 0.5)
@@ -44,7 +44,7 @@ class ReferKITTISceneDataset:
         """
 
         # Initialize empty vars
-        seq_names, seq_info_dicts, seq_det_dfs = [], {}, {}
+        seq_names, seq_info_dicts, seq_det_dfs, text_dicts = [], {}, {}, {}
 
         # Loop over the seqs to retrieve
         for dataset_path, seq_list in self.seqs.items():
@@ -53,25 +53,27 @@ class ReferKITTISceneDataset:
                 seq_processor = ReferKITTISeqProcessor(dataset_path=dataset_path, seq_name=seq_name, config=self.config)
                 # Nếu đã xử lý thì load, ko thì xử lý
                 # trong processed_data chứa embedding của appearance sau khi đã qua fast-reid
-                seq_det_df = seq_processor.load_or_process_detections()
+                seq_det_df, text_dict = seq_processor.load_or_process_detections()
 
                 # Accumulate
                 seq_names.append(seq_name)
                 seq_info_dicts[seq_name] = seq_det_df.seq_info_dict
                 seq_det_dfs[seq_name] = seq_det_df
+                text_dicts[seq_name] = text_dict
 
         assert len(seq_det_dfs) and len(seq_info_dicts) and len(seq_det_dfs), "No detections to process in the dataset"
-        return seq_det_dfs, seq_info_dicts, seq_names
+        return seq_det_dfs, seq_info_dicts, seq_names, text_dicts
 
     def _index_dataset(self):
         """
         Index the dataset in a form that we can sample
         """
-        seq_and_frames = []
+        seq_with_frames_and_text = []
         # Loop over the scenes
         for scene in self.seq_names:
             # Get scene specific dataframe
             scene_df = self.seq_det_dfs[scene]
+            text_dict = self.text_dicts[scene]
             frames_per_graph = self.config.frames_per_graph # default: 512: Số frame được đưa vào 1 graph
 
             # Scene specific values
@@ -88,11 +90,12 @@ class ReferKITTISceneDataset:
                     # Each frame can be a start and end frame only once. To prevent (1, 30), (2, 30) ... (29, 30)
                     if (graph_df.frame.min() not in start_frames) and (graph_df.frame.max() not in end_frames) and (
                             len(graph_df.frame.unique()) >= 2):
-                        seq_and_frames.append((scene, graph_df.frame.min(), graph_df.frame.max()))
-                        start_frames.append(graph_df.frame.min())
-                        end_frames.append(graph_df.frame.max())
+                        for text in text_dict.keys():
+                            seq_with_frames_and_text.append((scene, graph_df.frame.min(), graph_df.frame.max(), text))
+                            start_frames.append(graph_df.frame.min())
+                            end_frames.append(graph_df.frame.max())
 
-        return tuple(seq_and_frames)
+        return tuple(seq_with_frames_and_text)
 
     def _sparse_index_dataset(self):
         """
@@ -104,6 +107,7 @@ class ReferKITTISceneDataset:
 
         for scene in self.seq_names:
             scene_df = self.seq_det_dfs[scene]
+            text_dict = self.text_dicts[scene]
             sparse_frames = []
 
             # Scene specific values
@@ -123,11 +127,12 @@ class ReferKITTISceneDataset:
                 if (graph_df.frame.min() not in start_frames) and (graph_df.frame.max() not in end_frames) and (
                         len(graph_df.frame.unique()) >= 2):
                     # Include the sample
-                    sparse_frames.append((scene, graph_df.frame.min(), graph_df.frame.max()))
+                    for text in text_dict:
+                        sparse_frames.append((scene, graph_df.frame.min(), graph_df.frame.max(), text))
 
-                    # Update start and end frames
-                    start_frames.append(graph_df.frame.min())
-                    end_frames.append(graph_df.frame.max())
+                        # Update start and end frames
+                        start_frames.append(graph_df.frame.min())
+                        end_frames.append(graph_df.frame.max())
 
                     # Update the min frame
                     current_frames = sorted(list(graph_df.frame.unique()))
@@ -189,7 +194,7 @@ class ReferKITTISceneDataset:
 
         return graph_df, seq_info_dict
 
-    def get_graph_from_seq_and_frames(self, seq_name, start_frame, end_frame):
+    def get_graph_from_seq_and_frames(self, seq_name, start_frame, end_frame, text):
         """
         Main dataloading function. Returns a hierarchical graph belonging to the specified sequence range
         Hàm chính để xử lý các video thành dạng graph
@@ -266,8 +271,8 @@ class ReferKITTISceneDataset:
         return hierarchical_graph
 
     def __len__(self):
-        return len(self.seq_and_frames)
+        return len(self.seq_with_frames_and_text)
 
     def __getitem__(self, ix):
-        seq_name, start_frame, end_frame = self.seq_and_frames[ix]
-        return self.get_graph_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame)
+        seq_name, start_frame, end_frame, text = self.seq_with_frames_and_text[ix]
+        return self.get_graph_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, text=text)

@@ -514,6 +514,8 @@ class HICLTracker:
             self.eval_func(tracker_path=osp.join(self.config.experiment_path, 'oracle'), split=self.val_split,
                            data_path=self.config.data_path, tracker_sub_folder=self.config.mot_sub_folder,
                            output_sub_folder=self.config.mot_sub_folder)
+
+        return
         #raise RuntimeError
         assert self.model.training, "Training error: Model is not in training mode"
 
@@ -593,15 +595,15 @@ class HICLTracker:
             logs_all = [{"Loss": [], "TP": [], "FP": [], "TN": [], "FN": [], "CSR": []} for i in range(self.config.hicl_depth)]
 
             # Loop over sequences
-            for seq, seq_and_frames in dataset.sparse_frames_per_seq.items():
+            for seq, seq_with_frames_and_text in dataset.sparse_frames_per_seq.items():
                 print("Tracking", seq)
                 # Loop over each datapoint - Equivalent to using a dataloader with batch 1
                 seq_dfs = []
-                for seq_name, start_frame, end_frame in seq_and_frames:
+                for seq_name, start_frame, end_frame, text in seq_with_frames_and_text:
                     # Equivalent to train_batch with a single datapoint
                     # Tạo 1 cái graph cho 1 lần train 512 frames,
                     # data là cái HierarchicalGraph chứa embedding ngoại hình của các detection, số frame, bounding box của chúng
-                    data = dataset.get_graph_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame)
+                    data = dataset.get_graph_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, text=text)
                     data.to(self.config.device)
 
                     # Small trick to utilize torch-geometric built in functions

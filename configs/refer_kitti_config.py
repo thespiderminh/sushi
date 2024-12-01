@@ -103,7 +103,11 @@ def get_arguments(args=None):
                         default=2048)
 
     parser.add_argument('--l2_norm_reid',action='store_true', default=False)
-    
+
+    # TEXT SETTING
+    parser.add_argument('--text_file', help='Text file to use', type=str, default='text')
+    parser.add_argument('--text_embeddings_dir', help='Storage directory of text embeddings', type=str, default='text_clip')
+    parser.add_argument('--node_embeddings_clip_dir', help='Storage directory of node embeddings', type=str, default='node_clip_ViT_B_32')
 
     # EMBEDDING DIRECTORIES
     parser.add_argument('--reid_embeddings_dir', help='Storage directory of reid embeddings', type=str, default='reid_fastreid_msmt_BOT_R50_ib')
@@ -195,8 +199,8 @@ def post_config(config):
     config = create_experiment_path(config)
 
     # Dataframe Columns to keep in order to produce a tracking output
-    config.VIDEO_COLUMNS = ['frame_path', 'frame', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'bb_right', 'bb_bot']  # Columns to save in the output df
-    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'conf', 'x', 'y', 'z']  # MotCha output format
+    config.VIDEO_COLUMNS = ['frame_path', 'frame', 'name', 'truncation', 'occlusion', 'direction', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'bb_right', 'bb_bot']  # Columns to save in the output df
+    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'name', 'truncation', 'occlusion', 'direction', 'bb_left', 'bb_top', 'bb_right', 'bb_bot', 'conf', 'x', 'y', 'z']  # MotCha output format
 
     # Motion things
     config.do_motion = max(config.mpn_use_motion)

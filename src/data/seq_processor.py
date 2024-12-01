@@ -2,7 +2,7 @@
 Process the sequences from the detection/gt file. Moreover, if they are already processed, loads the corresponding
 dataframes.
 """
-
+import pickle
 from typing import OrderedDict
 import numpy as np
 import os
@@ -12,12 +12,15 @@ import pandas as pd
 from torch.utils.data import DataLoader
 import torch
 from lapsolver import solve_dense
+import clip
+from torchvision.transforms import ToPILImage
+from scipy.optimize import linear_sum_assignment
 
 from src.data.mot_challenge.mot17 import get_mot_gt, get_mot_det_df_from_gt, get_mot_det_df_from_det
 from src.data.dancetrack.dancetrack import get_dancetrack_gt, get_dancetrack_det_df_from_det
 from src.data.bdd.bdd import get_bdd_gt, get_bdd_det_df_from_det
 from src.data.kitti.kitti import get_kitti_det_df
-from src.data.kitti.refer_kitti import get_refer_kitti_det_df
+from src.data.kitti.refer_kitti import get_refer_kitti_det_df, get_refer_gt
 from src.utils.deterministic import seed_generator, seed_worker
 from src.models.reid.resnet import resnet50_fc256, resnet50_fc512, load_pretrained_weights
 from src.models.reid.fastreid_models import load_fastreid_model
@@ -28,7 +31,7 @@ import time
 # ################################### SETUP ###################################
 # Loader functions for the sequence type
 _SEQ_TYPE_DETS_DF_LOADER = {'MOT': get_mot_det_df_from_det, 'MOT_GT': get_mot_det_df_from_gt, 'MOT_DANCETRACK': get_dancetrack_det_df_from_det, 'MOT_BDD': get_bdd_det_df_from_det, 'KITTI': get_kitti_det_df, "Refer_KITTI": get_refer_kitti_det_df}
-_SEQ_TYPE_GT_DF_LOADER = {'MOT': get_mot_gt, 'MOT_GT': get_mot_gt, 'MOT_DANCETRACK': get_dancetrack_gt, 'MOT_BDD': get_bdd_gt, 'KITTI': None, "Refer_KITTI": None}
+_SEQ_TYPE_GT_DF_LOADER = {'MOT': get_mot_gt, 'MOT_GT': get_mot_gt, 'MOT_DANCETRACK': get_dancetrack_gt, 'MOT_BDD': get_bdd_gt, 'KITTI': None, "Refer_KITTI": get_refer_gt}
 
 # Are boxes allowed to be outside?
 _ENSURE_BOX_IN_FRAME = {'MOT': False, 'MOT_GT': False, 'MOT_DANCETRACK': False, 'MOT_BDD': False, 'KITTI': False, 'Refer_KITTI': False}  # MOT17 boxes are inside the frame for both det and gt
@@ -847,7 +850,7 @@ class ReferKITTISeqProcessor:
         """
         # Read the dfs
         # :det_df: Dataframe chứa thông tin các detection, tất cả id đều là -1
-        self.det_df, seq_info_dict = self.det_df_loader(self.seq_name, self.dataset_path, self.config)
+        self.det_df, seq_info_dict, self.text_dict = self.det_df_loader(self.seq_name, self.dataset_path, self.config)
         if seq_info_dict['has_gt']:
             self.gt_df = self.gt_df_loader(self.seq_name, self.dataset_path, self.config)
 
@@ -900,6 +903,7 @@ class ReferKITTISeqProcessor:
         Biết, trước bước này, các detection đều có id là -1
         """
         if self.det_df.seq_info_dict['has_gt'] and not self.det_df.seq_info_dict['is_gt']:
+            convert = {}
             print(f"Assigning ground truth identities to detections to sequence {self.seq_name}")
             for frame in self.det_df['frame'].unique():
                 frame_detects = self.det_df[self.det_df.frame == frame]
@@ -908,6 +912,21 @@ class ReferKITTISeqProcessor:
                 # Compute IoU for each pair of detected / GT bounding box
                 iou_matrix = iou(frame_detects[['bb_top', 'bb_left', 'bb_bot', 'bb_right']].values,
                                  frame_gt[['bb_top', 'bb_left', 'bb_bot', 'bb_right']].values)
+
+                # Apply Hungarian algorithm to find the best matching pairs
+                row_ind, col_ind = linear_sum_assignment(-iou_matrix)
+                pairs = list(zip(row_ind, col_ind))
+
+                print("frame_detects = ", frame_detects)
+                print("frame_gt = ", frame_gt)
+                print("iou_matrix = ", iou_matrix)
+                print("Best pairs:")
+                for a, b in pairs:
+                    if a not in convert:
+                        convert[frame_detects.iloc]
+                    print(f"        A[{a}] <-> B[{b}] với IoU: {iou_matrix[a, b]}")
+
+                break
 
                 iou_matrix[iou_matrix < self.config.gt_assign_min_iou] = np.nan # Not a Number
                 dist_matrix = 1 - iou_matrix
@@ -942,6 +961,22 @@ class ReferKITTISeqProcessor:
             gt_df_path = osp.join(processed_gt_path, 'gt_df' + '.pkl')
             self.gt_df.to_pickle(gt_df_path)
 
+    def _store_txts(self):
+        """
+        Save texts under processed data
+        """
+        # Storage dirs
+        training_path = osp.dirname(osp.dirname(self.det_df.seq_info_dict['seq_path']))
+        processed_dets_path = osp.join(training_path, 'processed_refer_data', self.det_df.seq_info_dict['seq'][-4:], 'text')
+        # Create dirs
+        os.makedirs(processed_dets_path, exist_ok=True)
+        # File names
+        text_df_path = osp.join(processed_dets_path, self.config.text_file + '.pkl')
+        # Store
+        with open(text_df_path, 'wb') as file: # Sử dụng pickle để ghi dictionary vào file
+            pickle.dump(self.text_dict, file)
+
+
     def _store_embeddings(self):
         """
         Stores node and reid embeddings corresponding for each detection in the given sequence.
@@ -958,10 +993,16 @@ class ReferKITTISeqProcessor:
         # Directory paths
         training_path = osp.dirname(osp.dirname(self.det_df.seq_info_dict['seq_path']))
         node_embeds_path = osp.join(training_path, 'processed_refer_data', self.det_df.seq_info_dict['seq'][-4:], 'embeddings',
-                                self.config.det_file, self.config.node_embeddings_dir)
+                                    self.config.det_file, self.config.node_embeddings_dir)
 
         reid_embeds_path = osp.join(training_path, 'processed_refer_data', self.det_df.seq_info_dict['seq'][-4:], 'embeddings',
                                     self.config.det_file, self.config.reid_embeddings_dir)
+        
+        node_embeds_clip_path = osp.join(training_path, 'processed_refer_data', self.det_df.seq_info_dict['seq'][-4:], 'embeddings',
+                                    self.config.det_file, self.config.node_embeddings_clip_dir)
+
+        text_embeds_path = osp.join(training_path, 'processed_refer_data', self.det_df.seq_info_dict['seq'][-4:], 'embeddings',
+                                    self.config.text_file, self.config.text_embeddings_dir)
 
         # Delete if exists, and create the directories
         if osp.exists(node_embeds_path):
@@ -970,8 +1011,16 @@ class ReferKITTISeqProcessor:
         if osp.exists(reid_embeds_path):
             print("Found existing stored reid embeddings. Deleting them and replacing them for new ones")
             shutil.rmtree(reid_embeds_path)
+        if osp.exists(node_embeds_clip_path):
+            print("Found existing stored node embeddings for clip model. Deleting them and replacing them for new ones")
+            shutil.rmtree(node_embeds_clip_path)
+        if osp.exists(text_embeds_path):
+            print("Found existing stored text embeddings. Deleting them and replacing them for new ones")
+            shutil.rmtree(text_embeds_path)
         os.makedirs(node_embeds_path)
         os.makedirs(reid_embeds_path)
+        os.makedirs(node_embeds_clip_path)
+        os.makedirs(text_embeds_path)
 
         print(f"Computing embeddings for {self.det_df.shape[0]} detections")  # Info num detections
 
@@ -1000,20 +1049,35 @@ class ReferKITTISeqProcessor:
 
             # Feed them to the model
             self.feature_embedding_model.eval()
-            node_embeds, reid_embeds = [], []  # Node: before fc layers (2048), reid after fc layers (256)
+            self.clip_embedding_model.eval()
+            node_embeds, reid_embeds, node_embeds_clip = [], [], []  # Node: before fc layers (2048), reid after fc layers (256)
             frame_nums, det_ids = [], []
             with torch.no_grad():
                 for frame_num, det_id, bboxes in bbox_loader:
-                    #node_out, reid_out = self.feature_embedding_model(bboxes.to(self.config.device))
+                    # FASTREID
                     feature_out = self.feature_embedding_model(bboxes.to(self.config.device))
+
+                    # CLIP
+                    to_pil = ToPILImage()
+                    features_out_clip = torch.Tensor().to(self.config.device)
+                    for i in range(bboxes.size(0)):
+                        pil_image = to_pil(bboxes[i])
+                        pil_tensor = self.clip_transform(pil_image).unsqueeze(0)
+                        feature_out_clip = self.clip_embedding_model.encode_image(pil_tensor.to(self.config.device))
+                        features_out_clip = torch.cat((features_out_clip, feature_out_clip))
+
                     if isinstance(feature_out, torch.Tensor):
                         node_out = feature_out
                         reid_out = feature_out.clone()
                     else:
                         node_out, reid_out = feature_out
+
+                    if isinstance(feature_out_clip, torch.Tensor):
+                        node_out_clip = features_out_clip
                         
                     node_embeds.append(node_out.cpu())
                     reid_embeds.append(reid_out.cpu())
+                    node_embeds_clip.append(node_out_clip.cpu())
                     frame_nums.append(frame_num)
                     det_ids.append(det_id)
 
@@ -1022,24 +1086,38 @@ class ReferKITTISeqProcessor:
             frame_nums = torch.cat(frame_nums, dim=0)
             node_embeds = torch.cat(node_embeds, dim=0)
             reid_embeds = torch.cat(reid_embeds, dim=0)
+            node_embeds_clip = torch.cat(node_embeds_clip, dim=0)
 
             # Add detection ids as first column of embeddings, to ensure that embeddings are loaded correctly
             node_embeds = torch.cat((det_ids.view(-1, 1).float(), node_embeds), dim=1)
             reid_embeds = torch.cat((det_ids.view(-1, 1).float(), reid_embeds), dim=1)
+            node_embeds_clip = torch.cat((det_ids.view(-1, 1).float(), node_embeds_clip), dim=1)
 
             # Save embeddings grouped by frame
             for frame in sub_df.frame.unique():
                 mask = frame_nums == frame
                 frame_node_embeds = node_embeds[mask]
                 frame_reid_embeds = reid_embeds[mask]
+                frame_node_embeds_clip = node_embeds_clip[mask]
 
                 frame_node_embeds_path = osp.join(node_embeds_path, f"{frame}.pt")
                 frame_reid_embeds_path = osp.join(reid_embeds_path, f"{frame}.pt")
+                frame_node_embeds_clip_path = osp.join(node_embeds_clip_path, f"{frame}.pt")
 
                 torch.save(frame_node_embeds, frame_node_embeds_path)
                 torch.save(frame_reid_embeds, frame_reid_embeds_path)
+                torch.save(frame_node_embeds_clip, frame_node_embeds_clip_path)
 
             # print("Finished storing embeddings")
+
+        text_list = list(self.text_dict.keys())
+        for text in text_list:
+            modified_text = text.replace('-', ' ')
+            modified_text = clip.tokenize(modified_text).to(self.config.device)
+            feature_out = self.clip_embedding_model.encode_text(modified_text)
+            _text_embeds_path = osp.join(text_embeds_path, f"{text}.pt")
+            torch.save(feature_out, _text_embeds_path)
+
         print("Finished computing and storing embeddings")
 
     def process_detections(self):
@@ -1050,11 +1128,12 @@ class ReferKITTISeqProcessor:
         self._get_dfs()  # Read the detection and ground truth files
         self._assign_gt()  # Assign ground truth ids
         self._store_dfs()  # Store the detection and gt dframes
+        self._store_txts()  # Store the texts
         self._store_embeddings()
 
-        return self.det_df
+        return self.det_df, self.text_dict
 
-    def _is_dets_and_embeds_ok(self, seq_path, seq_det_df_path):
+    def _is_dets_and_embeds_ok(self, seq_path, seq_det_df_path, seq_text_df_path):
         # Verify the processed detections file
         training_path = osp.dirname(osp.dirname(seq_path))
         seq_name = osp.basename(seq_path)
@@ -1062,22 +1141,32 @@ class ReferKITTISeqProcessor:
                                     self.config.det_file, self.config.node_embeddings_dir)
         reid_embeds_path = osp.join(training_path, 'processed_refer_data', seq_name[-4:], 'embeddings',
                                     self.config.det_file, self.config.reid_embeddings_dir)
+        node_embeds_clip_path = osp.join(training_path, 'processed_refer_data', seq_name[-4:], 'embeddings', 
+                                    self.config.det_file, self.config.node_embeddings_clip_dir)
+        text_embeds_path = osp.join(training_path, 'processed_refer_data', seq_name[-4:], 'embeddings',
+                                    self.config.text_file, self.config.text_embeddings_dir)
 
         try:
             num_frames = len(pd.read_pickle(seq_det_df_path)['frame'].unique())
+            with open(seq_text_df_path, 'rb') as file:
+                text_dict = pickle.load(file)
+            num_texts = len(text_dict)
             processed_dets_exist = True
         except:
             num_frames = -1
+            num_texts = -1
             processed_dets_exist = False
 
         # Verify the length of the embeddings
         embeds_ok = osp.exists(node_embeds_path) and len(os.listdir(node_embeds_path)) == num_frames
         embeds_ok = embeds_ok and osp.exists(reid_embeds_path) and len(os.listdir(reid_embeds_path)) == num_frames
+        embeds_ok = embeds_ok and osp.exists(node_embeds_clip_path) and len(os.listdir(node_embeds_clip_path)) == num_frames
+        embeds_ok = embeds_ok and osp.exists(text_embeds_path) and len(os.listdir(text_embeds_path)) == num_texts
 
         # Are both okay?
         return processed_dets_exist and embeds_ok
 
-    def _load_feature_embedding_model(self):
+    def _load_feature_embedding_model(self, training_folder_path):
         """
         Load the embedding cnn model to get the embeddings
         """
@@ -1104,9 +1193,14 @@ class ReferKITTISeqProcessor:
         
         else:
             raise NameError(f"ReID architecture is not {self.config.reid_arch} a valid option")
+        
+        all_datasets_path = osp.dirname(osp.dirname(training_folder_path))
+        download_root = osp.join(osp.dirname(all_datasets_path), "ClipModel")
+        clip_embedding_model, clip_tranforms = clip.load("ViT-B/32", device=self.config.device, download_root=download_root)
+        clip_embedding_model = clip_embedding_model.to(self.config.device)
             
         #load_pretrained_weights(feature_embedding_model, self.config.feature_embedding_model_path)
-        return feature_embedding_model, transforms
+        return feature_embedding_model, transforms, clip_embedding_model, clip_tranforms
     
     def load_or_process_detections(self):
         """
@@ -1118,16 +1212,19 @@ class ReferKITTISeqProcessor:
         seq_path = osp.join(self.dataset_path, self.seq_name[-4:])
         training_folder_path = osp.dirname(self.dataset_path)
         seq_det_df_path = osp.join(training_folder_path, 'processed_refer_data', self.seq_name[-4:], 'det', self.config.det_file + '.pkl')
+        seq_text_df_path = osp.join(training_folder_path, 'processed_refer_data', self.seq_name[-4:], 'text', self.config.text_file + '.pkl')
 
-        if self._is_dets_and_embeds_ok(seq_path, seq_det_df_path):
+        if self._is_dets_and_embeds_ok(seq_path, seq_det_df_path, seq_text_df_path):
             print(f"Loading processed dets for sequence {self.seq_name} from {seq_det_df_path}")
             seq_det_df = pd.read_pickle(seq_det_df_path).reset_index().sort_values(by=['frame', 'detection_id'])
+            with open(seq_text_df_path, 'rb') as file:
+                text_dict = pickle.load(file)
         else:
             print(f'Detections for sequence {self.seq_name} need to be processed. Starting processing')
-            self.feature_embedding_model, self.transforms = self._load_feature_embedding_model()
-            seq_det_df = self.process_detections()
+            self.feature_embedding_model, self.transforms, self.clip_embedding_model, self.clip_transform = self._load_feature_embedding_model(training_folder_path)
+            seq_det_df, text_dict = self.process_detections()
 
         seq_det_df.seq_info_dict['seq_path'] = seq_path
-        return seq_det_df
+        return seq_det_df, text_dict
 
 
