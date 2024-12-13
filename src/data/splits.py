@@ -82,10 +82,10 @@ def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split
     ########
     # Refer-KITTI
     ########
-    _SPLITS['refer-kitti-train-all'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in range(1, 17)]}
-    _SPLITS['refer-kitti-val-all'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (18, 20)]}
-    _SPLITS['refer-kitti-train-split2'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (2,)]}
-    _SPLITS['refer-kitti-val-split2'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (1,)]}
+    _SPLITS['refer-kitti-train-all'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in range(1, 14)]}
+    _SPLITS['refer-kitti-val-all'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (14, 15, 16, 18, 20)]}
+    _SPLITS['refer-kitti-train-split2'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (1,)]}
+    _SPLITS['refer-kitti-val-split2'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (2,)]}
 
 
     # Ensure that split is valid

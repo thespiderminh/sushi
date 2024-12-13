@@ -902,8 +902,8 @@ class ReferKITTISeqProcessor:
         So sánh các detection do thuật toán và detection gt, nếu iou > gt_assign_min_iou thì cho 2 id bằng nhau luôn
         Biết, trước bước này, các detection đều có id là -1
         """
+        convert = {}
         if self.det_df.seq_info_dict['has_gt'] and not self.det_df.seq_info_dict['is_gt']:
-            convert = {}
             print(f"Assigning ground truth identities to detections to sequence {self.seq_name}")
             for frame in self.det_df['frame'].unique():
                 frame_detects = self.det_df[self.det_df.frame == frame]
@@ -917,16 +917,12 @@ class ReferKITTISeqProcessor:
                 row_ind, col_ind = linear_sum_assignment(-iou_matrix)
                 pairs = list(zip(row_ind, col_ind))
 
-                print("frame_detects = ", frame_detects)
-                print("frame_gt = ", frame_gt)
-                print("iou_matrix = ", iou_matrix)
-                print("Best pairs:")
                 for a, b in pairs:
-                    if a not in convert:
-                        convert[frame_detects.iloc]
-                    print(f"        A[{a}] <-> B[{b}] với IoU: {iou_matrix[a, b]}")
-
-                break
+                    first_id = frame_detects.iloc[a]['id']
+                    second_id = frame_gt.iloc[b]['id']
+                    if first_id not in convert and second_id not in convert:
+                        convert[first_id] = second_id
+                        convert[second_id] = first_id
 
                 iou_matrix[iou_matrix < self.config.gt_assign_min_iou] = np.nan # Not a Number
                 dist_matrix = 1 - iou_matrix
@@ -939,6 +935,9 @@ class ReferKITTISeqProcessor:
 
                 self.det_df.loc[assigned_detect_ixs_index, 'id'] = assigned_detect_ixs_ped_ids
                 self.det_df.loc[unassigned_detect_ixs_index, 'id'] = -1  # False Positives
+
+        self.det_df['id'] = self.det_df['id'].map(convert).fillna(self.det_df['id'])
+        self.det_df['id'] = self.det_df['id'].astype(int)
 
     def _store_dfs(self):
         """
@@ -1046,6 +1045,14 @@ class ReferKITTISeqProcessor:
             bbox_loader = DataLoader(bbox_dataset, batch_size=16, pin_memory=True,
                                      num_workers=self.config.num_workers,
                                      worker_init_fn=seed_worker, generator=seed_generator(),)
+            # make a no-tranform dataset for CLIP
+            clip_bbox_dataset = BoundingBoxDataset(sub_df, seq_info_dict=self.det_df.seq_info_dict,
+                                              return_det_ids_and_frame=True, 
+                                              transforms=None,
+                                              output_size=(self.config.reid_img_h, self.config.reid_img_w))
+            clip_bbox_loader = DataLoader(clip_bbox_dataset, batch_size=16, pin_memory=True,
+                                     num_workers=self.config.num_workers,
+                                     worker_init_fn=seed_worker, generator=seed_generator(),)
 
             # Feed them to the model
             self.feature_embedding_model.eval()
@@ -1053,33 +1060,33 @@ class ReferKITTISeqProcessor:
             node_embeds, reid_embeds, node_embeds_clip = [], [], []  # Node: before fc layers (2048), reid after fc layers (256)
             frame_nums, det_ids = [], []
             with torch.no_grad():
+                # FASTREID
                 for frame_num, det_id, bboxes in bbox_loader:
-                    # FASTREID
                     feature_out = self.feature_embedding_model(bboxes.to(self.config.device))
-
-                    # CLIP
-                    to_pil = ToPILImage()
-                    features_out_clip = torch.Tensor().to(self.config.device)
-                    for i in range(bboxes.size(0)):
-                        pil_image = to_pil(bboxes[i])
-                        pil_tensor = self.clip_transform(pil_image).unsqueeze(0)
-                        feature_out_clip = self.clip_embedding_model.encode_image(pil_tensor.to(self.config.device))
-                        features_out_clip = torch.cat((features_out_clip, feature_out_clip))
 
                     if isinstance(feature_out, torch.Tensor):
                         node_out = feature_out
                         reid_out = feature_out.clone()
                     else:
                         node_out, reid_out = feature_out
+                        
+                    node_embeds.append(node_out.cpu())
+                    reid_embeds.append(reid_out.cpu())
+                    frame_nums.append(frame_num)
+                    det_ids.append(det_id)
+                
+                # CLIP
+                for frame_num, det_id, bboxes in clip_bbox_loader:
+                    features_out_clip = torch.Tensor().to(self.config.device)
+                    for i in range(bboxes.size(0)):
+                        pil_tensor = bboxes[i].unsqueeze(0)
+                        feature_out_clip = self.clip_embedding_model.encode_image(pil_tensor.to(self.config.device))
+                        features_out_clip = torch.cat((features_out_clip, feature_out_clip))
 
                     if isinstance(feature_out_clip, torch.Tensor):
                         node_out_clip = features_out_clip
                         
-                    node_embeds.append(node_out.cpu())
-                    reid_embeds.append(reid_out.cpu())
                     node_embeds_clip.append(node_out_clip.cpu())
-                    frame_nums.append(frame_num)
-                    det_ids.append(det_id)
 
             # Merge with all results
             det_ids = torch.cat(det_ids, dim=0)
@@ -1109,14 +1116,15 @@ class ReferKITTISeqProcessor:
                 torch.save(frame_node_embeds_clip, frame_node_embeds_clip_path)
 
             # print("Finished storing embeddings")
-
-        text_list = list(self.text_dict.keys())
-        for text in text_list:
-            modified_text = text.replace('-', ' ')
-            modified_text = clip.tokenize(modified_text).to(self.config.device)
-            feature_out = self.clip_embedding_model.encode_text(modified_text)
-            _text_embeds_path = osp.join(text_embeds_path, f"{text}.pt")
-            torch.save(feature_out, _text_embeds_path)
+        with torch.no_grad():
+            text_list = list(self.text_dict.keys())
+            for text in text_list:
+                modified_text = text.replace('-', ' ')
+                modified_text = clip.tokenize(modified_text).to(self.config.device)
+                feature_out = self.clip_embedding_model.encode_text(modified_text)
+                feature_out = feature_out.cpu()
+                _text_embeds_path = osp.join(text_embeds_path, f"{text}.pt")
+                torch.save(feature_out, _text_embeds_path)
 
         print("Finished computing and storing embeddings")
 

@@ -2,8 +2,14 @@ from PIL import Image
 from skimage.io import imread
 from numpy import pad
 from torch.utils.data import Dataset, DataLoader
-from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+from torchvision.transforms import Compose, Resize, ToTensor, Normalize, CenterCrop
 import numpy as np
+
+try:
+    from torchvision.transforms import InterpolationMode
+    BICUBIC = InterpolationMode.BICUBIC
+except ImportError:
+    BICUBIC = Image.BICUBIC
 
 class BoundingBoxDataset(Dataset):
     """
@@ -16,8 +22,21 @@ class BoundingBoxDataset(Dataset):
         self.seq_info_dict = seq_info_dict
         self.pad = pad_
         self.pad_mode = pad_mode
+
+        def _convert_image_to_rgb(image):
+            return image.convert("RGB")
+        
         if transforms is None:
-            self.transforms = Compose((Resize(output_size), ToTensor(), Normalize(mean=[0.485, 0.456, 0.406],
+            if seq_info_dict['seq'][:5] == 'refer':
+                self.transforms = Compose([
+                        Resize(224, interpolation=BICUBIC),
+                        CenterCrop(224),
+                        _convert_image_to_rgb,
+                        ToTensor(),
+                        Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
+                    ])
+            else:
+                self.transforms = Compose((Resize(output_size), ToTensor(), Normalize(mean=[0.485, 0.456, 0.406],
                                                                                 std=[0.229, 0.224, 0.225])))
         else:
             self.transforms = transforms                                                                            

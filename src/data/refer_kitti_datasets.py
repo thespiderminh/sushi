@@ -7,6 +7,7 @@ import os.path as osp
 from src.data.graph import HierarchicalGraph
 from collections import OrderedDict
 from torch.nn import functional as F
+from torch import nn
 
 
 class ReferKITTISceneDataset:
@@ -180,8 +181,15 @@ class ReferKITTISceneDataset:
         #embeddings = embeddings[:, 1:]  # Get rid of the detection index (MOVED TO OUT OF THIS FUNCTION)
 
         return embeddings
+    
+    def _load_precomputed_text_embeddings(self, text, seq_info_dict, embeddings_dir):
+        training_path = osp.dirname(osp.dirname(seq_info_dict['seq_path']))
+        embeddings_path = osp.join(training_path, 'processed_refer_data', seq_info_dict['seq'][-4:], 'embeddings',
+                                   self.config.text_file, embeddings_dir)
+        # print("EMBEDDINGS PATH IS ", embeddings_path)
+        return torch.load(osp.join(embeddings_path, f"{text}.pt"))
 
-    def get_df_from_seq_and_frames(self, seq_name, start_frame, end_frame):
+    def get_df_from_seq_and_frames(self, seq_name, start_frame, end_frame, hicl_graphs=None):
         """
         Returns a dataframe and a seq_info_dict belonging to the specified sequence range
         """
@@ -190,6 +198,11 @@ class ReferKITTISceneDataset:
         seq_info_dict = self.seq_info_dicts[seq_name]  # Sequence info dict: Df chứa thông tin về video
         valid_frames = np.arange(start_frame, end_frame + 1)  # Frames to be processed together
         graph_df = seq_det_df[seq_det_df.frame.isin(valid_frames)].copy()  # Take only valid frames
+        if hicl_graphs is not None:
+            det_ids = hicl_graphs[0].det_id.t()[0].tolist()
+            filtered_df = graph_df[graph_df.apply(lambda row: (row['detection_id'] in det_ids), axis=1)]
+            graph_df = filtered_df
+
         graph_df = graph_df.sort_values(by=['frame', 'detection_id']).reset_index(drop=True)  # Sort
 
         return graph_df, seq_info_dict
@@ -219,6 +232,12 @@ class ReferKITTISceneDataset:
         x_node = self._load_precomputed_embeddings(det_df=graph_df, seq_info_dict=seq_info_dict,
                                                     embeddings_dir=self.config.node_embeddings_dir)
 
+        x_node_clip = self._load_precomputed_embeddings(det_df=graph_df, seq_info_dict=seq_info_dict,
+                                                        embeddings_dir=self.config.node_embeddings_clip_dir)
+
+        x_text = self._load_precomputed_text_embeddings(text=text, seq_info_dict=seq_info_dict,
+                                                    embeddings_dir=self.config.text_embeddings_dir)
+
 
         # Copy node frames and ground truth ids from the dataframe
         x_frame = torch.tensor(graph_df[['detection_id', 'frame']].values)
@@ -234,8 +253,10 @@ class ReferKITTISceneDataset:
                (x_feet[:, 0].numpy() == y_id[:, 0].numpy()).all(), "Feature and id mismatch while loading"
 
         # Get rid of the detection id index
+        det_id = x_frame[:, :1]
         x_reid = x_reid[:, 1:]
         x_node = x_node[:, 1:]
+        x_node_clip = x_node_clip[:, 1:]
         x_frame = x_frame[:, 1:]
         x_bbox = x_bbox[:, 1:]
         x_center = x_bbox[:, :2] + 0.5* x_bbox[:, 2:]
@@ -246,6 +267,28 @@ class ReferKITTISceneDataset:
             x_reid = F.normalize(x_reid, dim = -1, p=2)
             x_node = F.normalize(x_node, dim = -1, p=2)
 
+        x_node_clip = x_node_clip / x_node_clip.norm(dim=1, keepdim=True)
+        x_text = x_text / x_text.norm(dim=1, keepdim=True)
+        # cosine similarity as logits
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        logit_scale = self.logit_scale.exp()
+        x_text = x_text.float()
+        logits_per_image = logit_scale * x_node_clip @ x_text.t()
+
+        # get some most similar ones
+        top_values, top_indices = torch.topk(logits_per_image.t(), self.config.top_k_node_for_text)
+        mask = torch.ones(logits_per_image.t()[0].size(), dtype=torch.bool)
+        mask[top_indices] = False
+
+        det_id = det_id[mask]
+        x_reid = x_reid[mask]
+        x_node = x_node[mask]
+        x_node_clip = x_node_clip[mask]
+        x_frame = x_frame[mask]
+        x_bbox = x_bbox[mask]
+        x_center = x_center[mask]
+        x_feet = x_feet[mask]
+        y_id = y_id[mask]
 
         # Further important parameters to pass
         fps = torch.tensor(seq_info_dict['fps'])
@@ -264,6 +307,7 @@ class ReferKITTISceneDataset:
         # :y_id: ID của bounding box sau khi đã so với groundtruth
         hierarchical_graph = HierarchicalGraph(x_reid=x_reid.float(), x_node=x_node.float(), x_frame=x_frame.long(),
                                                x_bbox=x_bbox.float(), x_feet=x_feet.float(), x_center=x_center.float(), 
+                                               x_text=x_text.float(), x_node_clip=x_node_clip.float(), det_id=det_id,
                                                y_id=y_id.long(), fps=fps.long(), frames_total=frames_total.long(),
                                                frames_per_level=frames_per_level.long(), 
                                                start_frame=start_frame.long(), end_frame=end_frame.long())

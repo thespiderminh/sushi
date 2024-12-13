@@ -515,7 +515,6 @@ class HICLTracker:
                            data_path=self.config.data_path, tracker_sub_folder=self.config.mot_sub_folder,
                            output_sub_folder=self.config.mot_sub_folder)
 
-        return
         #raise RuntimeError
         assert self.model.training, "Training error: Model is not in training mode"
 
@@ -624,7 +623,7 @@ class HICLTracker:
                     ped_labels = hicl_graphs[0].get_labels()
 
                     # Get graph df
-                    graph_df, _ = dataset.get_df_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame)
+                    graph_df, _ = dataset.get_df_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, hicl_graphs=hicl_graphs)
                     assert len(ped_labels) == graph_df.shape[0], "Ped Ids Label format is wrong"
 
                     # Each Connected Component is a Ped Id. Assign those values to our DataFrame:

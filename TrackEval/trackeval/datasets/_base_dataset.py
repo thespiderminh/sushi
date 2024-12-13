@@ -96,6 +96,9 @@ class _BaseDataset(ABC):
         # Calculate similarities for each timestep.
         similarity_scores = []
         for t, (gt_dets_t, tracker_dets_t) in enumerate(zip(raw_data['gt_dets'], raw_data['tracker_dets'])):
+            if len(gt_dets_t) == 0:
+                similarity_scores.append(np.zeros((1, len(tracker_dets_t))))
+                continue
             ious = self._calculate_similarities(gt_dets_t, tracker_dets_t)
             similarity_scores.append(ious)
         raw_data['similarity_scores'] = similarity_scores
