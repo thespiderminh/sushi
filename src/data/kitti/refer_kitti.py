@@ -154,10 +154,12 @@ if __name__ == "__main__":
     a = get_refer_gt(seq_name="refer-0020", 
                             data_root_path="/data/hpc/ngocminh/SUSHI/datasets/KITTI/training/image_02", 
                             config=config)
+    print("Refer")
     print(a[a['frame'] == 0][['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']])
     a, b, text = get_refer_kitti_det_df(seq_name="refer-0020", 
                             data_root_path="/data/hpc/ngocminh/SUSHI/datasets/KITTI/training/image_02", 
                             config=config)
+    print("Normal")
     print(a[a['frame'] == 0][['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']])
     # pd.set_option('display.max_rows', None)
     # print(a[a['frame'] == 463])

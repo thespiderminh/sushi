@@ -7,6 +7,7 @@ from typing import OrderedDict
 import numpy as np
 import os
 import os.path as osp
+import sys
 import shutil
 import pandas as pd
 from torch.utils.data import DataLoader
@@ -902,27 +903,27 @@ class ReferKITTISeqProcessor:
         So sánh các detection do thuật toán và detection gt, nếu iou > gt_assign_min_iou thì cho 2 id bằng nhau luôn
         Biết, trước bước này, các detection đều có id là -1
         """
-        convert = {}
+        gt_id = np.unique(self.gt_df['id'])
+        existed_id = {a:True for a in gt_id}
+        iter = 0
+
+        def _find_new_iter(iter):
+            iter += 1
+            while iter in existed_id.keys():
+                iter += 1
+
+            existed_id[iter] = True
+            return iter
+
         if self.det_df.seq_info_dict['has_gt'] and not self.det_df.seq_info_dict['is_gt']:
             print(f"Assigning ground truth identities to detections to sequence {self.seq_name}")
             for frame in self.det_df['frame'].unique():
-                frame_detects = self.det_df[self.det_df.frame == frame]
+                frame_detects = self.det_df.loc[(self.det_df.frame == frame) & (self.det_df['id'] != 0)]
                 frame_gt = self.gt_df[self.gt_df.frame == frame]
 
                 # Compute IoU for each pair of detected / GT bounding box
                 iou_matrix = iou(frame_detects[['bb_top', 'bb_left', 'bb_bot', 'bb_right']].values,
                                  frame_gt[['bb_top', 'bb_left', 'bb_bot', 'bb_right']].values)
-
-                # Apply Hungarian algorithm to find the best matching pairs
-                row_ind, col_ind = linear_sum_assignment(-iou_matrix)
-                pairs = list(zip(row_ind, col_ind))
-
-                for a, b in pairs:
-                    first_id = frame_detects.iloc[a]['id']
-                    second_id = frame_gt.iloc[b]['id']
-                    if first_id not in convert and second_id not in convert:
-                        convert[first_id] = second_id
-                        convert[second_id] = first_id
 
                 iou_matrix[iou_matrix < self.config.gt_assign_min_iou] = np.nan # Not a Number
                 dist_matrix = 1 - iou_matrix
@@ -934,9 +935,11 @@ class ReferKITTISeqProcessor:
                 unassigned_detect_ixs_index = frame_detects.iloc[unassigned_detect_ixs].index
 
                 self.det_df.loc[assigned_detect_ixs_index, 'id'] = assigned_detect_ixs_ped_ids
-                self.det_df.loc[unassigned_detect_ixs_index, 'id'] = -1  # False Positives
+                # self.det_df.loc[unassigned_detect_ixs_index, 'id'] = -1  # False Positives
+                for i in unassigned_detect_ixs_index:
+                    iter = _find_new_iter(iter)
+                    self.det_df.loc[i, 'id'] = iter
 
-        self.det_df['id'] = self.det_df['id'].map(convert).fillna(self.det_df['id'])
         self.det_df['id'] = self.det_df['id'].astype(int)
 
     def _store_dfs(self):
@@ -1222,6 +1225,7 @@ class ReferKITTISeqProcessor:
         seq_det_df_path = osp.join(training_folder_path, 'processed_refer_data', self.seq_name[-4:], 'det', self.config.det_file + '.pkl')
         seq_text_df_path = osp.join(training_folder_path, 'processed_refer_data', self.seq_name[-4:], 'text', self.config.text_file + '.pkl')
 
+        print("--------------------------------")
         if self._is_dets_and_embeds_ok(seq_path, seq_det_df_path, seq_text_df_path):
             print(f"Loading processed dets for sequence {self.seq_name} from {seq_det_df_path}")
             seq_det_df = pd.read_pickle(seq_det_df_path).reset_index().sort_values(by=['frame', 'detection_id'])

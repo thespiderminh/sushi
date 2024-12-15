@@ -622,6 +622,17 @@ class HICLTracker:
                     # Pedestrian ids
                     ped_labels = hicl_graphs[0].get_labels()
 
+                    # for i in range(len(hicl_graphs[0].x_frame)):
+                    #     frame = hicl_graphs[0].x_frame[i].item()
+                    #     id = hicl_graphs[0].y_id[i].item()
+                    #     bbox = hicl_graphs[0].x_bbox[i]
+                    #     if frame == 0:
+                    #         print(ped_labels[i])
+                    #         print("frame = ", frame)
+                    #         print("id = ", id)
+                    #         print("bbox = ", bbox)
+                    #         print("------------------")
+
                     # Get graph df
                     graph_df, _ = dataset.get_df_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, hicl_graphs=hicl_graphs)
                     assert len(ped_labels) == graph_df.shape[0], "Ped Ids Label format is wrong"
