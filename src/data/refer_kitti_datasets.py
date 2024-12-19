@@ -96,6 +96,11 @@ class ReferKITTISceneDataset:
                             start_frames.append(graph_df.frame.min())
                             end_frames.append(graph_df.frame.max())
 
+        # half_length = len(tuple(seq_with_frames_and_text)) // 2
+        # import random
+        # random_sample = tuple(random.sample(tuple(seq_with_frames_and_text), half_length))
+
+        # return random_sample
         return tuple(seq_with_frames_and_text)
 
     def _sparse_index_dataset(self):

@@ -7,19 +7,17 @@ from src.tracker.hicl_tracker import HICLTracker
 from src.data.splits import get_seqs_from_splits
 import os.path as osp
 from TrackEval.scripts.run_mot_challenge import evaluate_mot17
-import time
-import torch
+from TrackEval.scripts.run_kitti import evaluate_kitti
+from TrackEval.scripts.run_refer_kitti import evaluate_refer_kitti
+
+_EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti, 'refer': evaluate_refer_kitti}
+_CONFIG_FILE = {'mot17': mot17_config, 'kitti': kitti_config, 'refer': refer_kitti_config}
 
 if __name__ == "__main__":
     run_id = os.getenv('RUN')
-    if run_id.startswith('kitti_'):
-        config = kitti_config.get_arguments()
-    elif run_id.startswith('refer_'):
-        config = refer_kitti_config.get_arguments()
-    elif run_id.startswith('mot17_'):
-        config = mot17_config.get_arguments()  # Get hyperparameters
-
+    config = _CONFIG_FILE[run_id[:5]].get_arguments()
     make_deterministic(config.seed)  # Make the experiment deterministic
+    eval_func = _EVAL_FUNC[config.run_id[:5]]
 
     # # Print the config and experiment id
     # print("Experiment ID:", config.experiment_path)
@@ -75,9 +73,9 @@ if __name__ == "__main__":
             print("####################")
 
         # Evaluate the performance of oracles and each epoch
-        evaluate_mot17(tracker_path=osp.join(config.experiment_path, 'oracle'), split=config.cval_seqs, data_path=config.data_path, tracker_sub_folder=config.mot_sub_folder, output_sub_folder=config.mot_sub_folder)
+        eval_func(tracker_path=osp.join(config.experiment_path, 'oracle'), split=config.cval_seqs, data_path=config.data_path, tracker_sub_folder=config.mot_sub_folder, output_sub_folder=config.mot_sub_folder)
         for e in range(1, config.num_epoch+1):
-            evaluate_mot17(tracker_path=osp.join(config.experiment_path, 'Epoch' + str(e)), split=config.cval_seqs, data_path=config.data_path, tracker_sub_folder=config.mot_sub_folder, output_sub_folder=config.mot_sub_folder)
+            eval_func(tracker_path=osp.join(config.experiment_path, 'Epoch' + str(e)), split=config.cval_seqs, data_path=config.data_path, tracker_sub_folder=config.mot_sub_folder, output_sub_folder=config.mot_sub_folder)
 
     # TESTING
     elif config.experiment_mode == 'test':
@@ -96,7 +94,7 @@ if __name__ == "__main__":
                                                                      oracle=False)
                
         # Only works if you are testing on train or val data. Will fail in case of a test set
-        evaluate_mot17(tracker_path=osp.join(hicl_tracker.config.experiment_path, 'test'), split=hicl_tracker.test_split,
+        eval_func(tracker_path=osp.join(hicl_tracker.config.experiment_path, 'test'), split=hicl_tracker.test_split,
                    data_path=hicl_tracker.config.data_path,
                    tracker_sub_folder=hicl_tracker.config.mot_sub_folder,
                    output_sub_folder=hicl_tracker.config.mot_sub_folder)

@@ -65,8 +65,8 @@ def get_arguments(args=None):
     parser.add_argument('--num_workers', help='Number of workers', type=int, default=4)
 
     # SPLITS
-    parser.add_argument('--train_splits', type=str, nargs='*', help='Training split', default="refer-kitti-train-all")
-    parser.add_argument('--val_splits', type=str, nargs='*', help='Validation split', default="refer-kitti-val-all")
+    parser.add_argument('--train_splits', type=str, nargs='*', help='Training split', default=[None])
+    parser.add_argument('--val_splits', type=str, nargs='*', help='Validation split', default=[None])
     parser.add_argument('--test_splits', type=str, nargs='*', help='Test split', default=[None])
     parser.add_argument('--cval_seqs', help='All range that crossvalidation covers (e.g all train seqs)', type=str, default='refer-kitti-train-all')
 
@@ -115,14 +115,14 @@ def get_arguments(args=None):
     parser.add_argument('--node_embeddings_dir', help='Storage directory of node embeddings', type=str, default='node_fastreid_msmt_BOT_R50_ib')
 
     # TRAINING
-    parser.add_argument('--num_epoch', help='Number of epochs for training', type=int, default=30)
-    parser.add_argument('--num_batch', help='Number of graphs per mot_sub_folder', type=int, default=4)
+    parser.add_argument('--num_epoch', help='Number of epochs for training', type=int, default=10)
+    parser.add_argument('--num_batch', help='Number of graphs per mot_sub_folder', type=int, default=3)
     parser.add_argument('--lr', help='Learning rate', type=float, default=0.0003)  # MPNTrack param
     parser.add_argument('--gamma', help='Focal loss gamma parameter', type=float, default=1)
     parser.add_argument('--weight_decay', help='Weight decay', type=float, default=0.0001)  # MPNTrack param
     parser.add_argument('--augmentation', help='Perform data augmentation during training', dest='augmentation', action='store_true')
-    parser.add_argument('--train_dataset_frame_overlap', help='Most frames to overlap for different datapoints', type=int, default=20)
-    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=20) # Don't start evaluating bf all layers are unfrozen!
+    parser.add_argument('--train_dataset_frame_overlap', help='Most frames to overlap for different datapoints', type=int, default=30)
+    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=2) # Don't start evaluating bf all layers are unfrozen!
     parser.add_argument('--no_fp_loss', help='Do not compute a loss for FPs', dest='no_fp_loss', action='store_true', default=False) 
 
 
@@ -144,21 +144,21 @@ def get_arguments(args=None):
 
     # GRAPH PARAMETERS
     parser.add_argument('--top_k_nns', help='Similarity of nodes to connect in a graph', type=int, default=10)
-    parser.add_argument('--frames_per_graph', help='Total number of frames to process', type=int, default=512)  # If larger than seq length, all frames of the seq will be used.
-    parser.add_argument('--frames_per_level', type=int, nargs='*', help='Number of frames to process at each hierarchical level', default=[2, 4, 8, 16, 32, 64, 128, 256, 512])
-    parser.add_argument('--pruning_method', type=str, nargs='*', help='Pruning scheme used at each hierarchical level', default=['geometry', 'motion_005', 'motion_005', 'motion_005', 'motion_005', 'motion_005', 'motion_005', 'motion_005', 'motion_005'])
+    parser.add_argument('--frames_per_graph', help='Total number of frames to process', type=int, default=128)  # If larger than seq length, all frames of the seq will be used.
+    parser.add_argument('--frames_per_level', type=int, nargs='*', help='Number of frames to process at each hierarchical level', default=[2, 4, 8, 16, 32, 64, 128])
+    parser.add_argument('--pruning_method', type=str, nargs='*', help='Pruning scheme used at each hierarchical level', default=['geometry', 'motion_005', 'motion_005', 'motion_005', 'motion_005', 'motion_005', 'motion_005'])
 
     parser.set_defaults(symmetric_edges=True)  # Graphs contain each edge twice with changing source and destination
 
     # HIERARCHICAL PARAMETERS
-    parser.add_argument('--hicl_depth', help='The depth of the hierarchical architecture', type=int, default=9)
+    parser.add_argument('--hicl_depth', help='The depth of the hierarchical architecture', type=int, default=7)
     parser.add_argument('--node_id_min_ratio', help='Min percentage of the most common id for hicl layers gt assignment', type=float, default=0.5)
     parser.add_argument('--depth_pretrain_iteration', help='Number of iterations before unlocking next level', type=int,
-                        default=1600)
+                        default=1000)
 
     # MOTION SETTING
-    parser.add_argument('--motion_max_length', type=int, nargs='*', help='Maximum number of frames used to encode trajectories before pred at each layer', default=[2, 4, 8, 16, 32, 64, 128, 256])
-    parser.add_argument('--motion_pred_length', type=int, nargs='*', help='Number of future/past frames for which locations are predicted at each level', default=[2, 4, 8, 16, 32, 64, 128, 256])
+    parser.add_argument('--motion_max_length', type=int, nargs='*', help='Maximum number of frames used to encode trajectories before pred at each layer', default=[2, 4, 8, 16, 32, 64])
+    parser.add_argument('--motion_pred_length', type=int, nargs='*', help='Number of future/past frames for which locations are predicted at each level', default=[2, 4, 8, 16, 32, 64])
     parser.add_argument('--interpolate_motion', action='store_true', help='If true, missing locations in each node location are filled via linear interpolation', default=False)
     parser.add_argument('--linear_center_only', action='store_true',help='If true, the linear motion model will only predict center locations, and leave width/height constant', default=False)
 
@@ -173,9 +173,9 @@ def get_arguments(args=None):
     parser.add_argument('--zero_nodes', action='store_true', default=False)
 
     # MOTION FEATURES
-    parser.add_argument('--mpn_use_motion', type=_store_bool, nargs='*', help='Use motion predictions GIoU as edge feature at each layer', default=[False, True, True, True, True, True, True, True, True])
-    parser.add_argument('--mpn_use_reid_edge', type=_store_bool, nargs='*', default=[True]*9)
-    parser.add_argument('--mpn_use_pos_edge', type=_store_bool, nargs='*', default=[True]*9)
+    parser.add_argument('--mpn_use_motion', type=_store_bool, nargs='*', help='Use motion predictions GIoU as edge feature at each layer', default=[False, True, True, True, True, True, True,])
+    parser.add_argument('--mpn_use_reid_edge', type=_store_bool, nargs='*', default=[True]*7)
+    parser.add_argument('--mpn_use_pos_edge', type=_store_bool, nargs='*', default=[True]*7)
 
     # VERBOSE
     parser.set_defaults(verbose_iteration=10)
