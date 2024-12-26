@@ -1,7 +1,9 @@
 import argparse
+from copy import deepcopy
 import json
 import os
 import os.path as osp
+import numpy as np
 import pandas as pd
 import configparser
 import cv2
@@ -151,12 +153,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     config = parser.parse_args()
     config.det_file = 'det'
-    a = get_refer_gt(seq_name="refer-0020", 
+    a = get_refer_gt(seq_name="refer-0000", 
                             data_root_path="/data/hpc/ngocminh/SUSHI/datasets/KITTI/training/image_02", 
                             config=config)
     print("Refer")
     print(a[a['frame'] == 0][['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']])
-    a, b, text = get_refer_kitti_det_df(seq_name="refer-0020", 
+    a, b, text = get_refer_kitti_det_df(seq_name="refer-0000", 
                             data_root_path="/data/hpc/ngocminh/SUSHI/datasets/KITTI/training/image_02", 
                             config=config)
     print("Normal")

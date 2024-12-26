@@ -513,7 +513,7 @@ class HICLTracker:
             _, _ = self.track(self.val_dataset, output_path=osp.join(self.config.experiment_path, 'oracle'), mode='val', oracle=True)
             self.eval_func(tracker_path=osp.join(self.config.experiment_path, 'oracle'), split=self.val_split,
                            data_path=self.config.data_path, tracker_sub_folder=self.config.mot_sub_folder,
-                           output_sub_folder=self.config.mot_sub_folder)
+                           output_sub_folder=self.config.mot_sub_folder,text=self.val_dataset.text_dicts)
 
         #raise RuntimeError
         assert self.model.training, "Training error: Model is not in training mode"
@@ -561,7 +561,8 @@ class HICLTracker:
 
                 # MOT metrics
                 mot_metrics= self.eval_func(tracker_path=epoch_path, split=self.val_split, data_path=self.config.data_path,
-                                            tracker_sub_folder=self.config.mot_sub_folder, output_sub_folder=self.config.mot_sub_folder)[0]
+                                            tracker_sub_folder=self.config.mot_sub_folder, output_sub_folder=self.config.mot_sub_folder,
+                                            text=self.val_dataset.text_dicts)[0]
                 self._log_tb_mot_metrics(mot_metrics) 
 
             # Plot losses
@@ -597,12 +598,12 @@ class HICLTracker:
             for seq, seq_with_frames_and_text in dataset.sparse_frames_per_seq.items():
                 print("Tracking", seq)
                 # Loop over each datapoint - Equivalent to using a dataloader with batch 1
-                seq_dfs = []
+                seq_dfs = {}
                 for seq_name, start_frame, end_frame, text in seq_with_frames_and_text:
                     # Equivalent to train_batch with a single datapoint
                     # Tạo 1 cái graph cho 1 lần train 512 frames,
                     # data là cái HierarchicalGraph chứa embedding ngoại hình của các detection, số frame, bounding box của chúng
-                    data = dataset.get_graph_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, text=text)
+                    data = dataset.get_graph_from_seq_and_frames_and_text(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, text=text)
                     data.to(self.config.device)
 
                     # Small trick to utilize torch-geometric built in functions
@@ -622,17 +623,6 @@ class HICLTracker:
                     # Pedestrian ids
                     ped_labels = hicl_graphs[0].get_labels()
 
-                    # for i in range(len(hicl_graphs[0].x_frame)):
-                    #     frame = hicl_graphs[0].x_frame[i].item()
-                    #     id = hicl_graphs[0].y_id[i].item()
-                    #     bbox = hicl_graphs[0].x_bbox[i]
-                    #     if frame == 0:
-                    #         print(ped_labels[i])
-                    #         print("frame = ", frame)
-                    #         print("id = ", id)
-                    #         print("bbox = ", bbox)
-                    #         print("------------------")
-
                     # Get graph df
                     graph_df, _ = dataset.get_df_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, hicl_graphs=hicl_graphs)
                     assert len(ped_labels) == graph_df.shape[0], "Ped Ids Label format is wrong"
@@ -643,21 +633,25 @@ class HICLTracker:
                     graph_output_df = graph_output_df[self.config.VIDEO_COLUMNS + ['conf', 'detection_id']].copy()
 
                     # Append the new df
-                    seq_dfs.append(graph_output_df)
+                    if text in seq_dfs:
+                        seq_dfs[text].append(graph_output_df)
+                    else:
+                        seq_dfs[text] = [graph_output_df]
 
                 # Merge the dataframes
-                seq_merged_df = self._merge_subseq_dfs(seq_dfs)
+                for text, seq_df_list in seq_dfs.items():
+                    seq_merged_df = self._merge_subseq_dfs(seq_df_list)
 
-                # Postprocess the dataframes - drop short trajectories
-                postprocess = Postprocessor(seq_merged_df.copy(),
-                                            seq_info_dict=dataset.seq_info_dicts[seq_name],
-                                            config=self.config)
-                seq_output_df = postprocess.postprocess_trajectories()
+                    # Postprocess the dataframes - drop short trajectories
+                    postprocess = Postprocessor(seq_merged_df.copy(),
+                                                seq_info_dict=dataset.seq_info_dicts[seq_name],
+                                                config=self.config)
+                    seq_output_df = postprocess.postprocess_trajectories()
 
-                # Save the output
-                os.makedirs(osp.join(output_path, self.config.mot_sub_folder), exist_ok=True)
-                tracking_file_path = osp.join(output_path, self.config.mot_sub_folder, seq_name + '.txt')
-                self._save_results(df=seq_output_df, output_file_path=tracking_file_path)
+                    # Save the output
+                    os.makedirs(osp.join(output_path, self.config.mot_sub_folder), exist_ok=True)
+                    tracking_file_path = osp.join(output_path, self.config.mot_sub_folder, seq_name + '-' + text + '.txt')
+                    self._save_results(df=seq_output_df, output_file_path=tracking_file_path)
 
             print("-----")
             print("Tracking completed!")

@@ -2,6 +2,7 @@
 import fnmatch
 import os
 import csv
+import json
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 from ._base_dataset import _BaseDataset
@@ -51,6 +52,8 @@ class ReferKitti2DBox(_BaseDataset):
         self.tracker_sub_fol = self.config['TRACKER_SUB_FOLDER']
         self.output_sub_fol = self.config['OUTPUT_SUB_FOLDER']
 
+        self.text_dict = self.config['TEXT_DICT']
+
         self.max_occlusion = 2
         self.max_truncation = 0
         self.min_height = 25
@@ -65,7 +68,7 @@ class ReferKitti2DBox(_BaseDataset):
                                        'cyclist': 6, 'tram': 7, 'misc': 8, 'dontcare': 9, 'car_2': 1}
         
         # Get sequences to eval and check gt files exist
-        self.seq_list, self.seq_lengths, self.frames_with_dets, self.frame_size = self._get_seq_info()
+        self.seq_list, self.seq_lengths = self._get_seq_info()
         if len(self.seq_list) < 1:
             raise TrackEvalException('No sequences are selected to be evaluated.')
 
@@ -102,8 +105,6 @@ class ReferKitti2DBox(_BaseDataset):
     def _get_seq_info(self):
         seq_list = []
         seq_lengths = {}
-        frame_size = 0
-        frames_with_dets = {}
         seqmap_file = self.config['SEQMAP_FILE']
         if not os.path.isfile(seqmap_file):
             raise TrackEvalException('no seqmap found: ' + os.path.basename(seqmap_file))
@@ -113,48 +114,26 @@ class ReferKitti2DBox(_BaseDataset):
                 if i == 0 or row[0] == '':
                     continue
                 seq = row[0]
-                seq_list.append(seq)
+                for text in self.text_dict[seq].keys():
+                    seq_list.append(seq + '-' + text)
                 # Get num_frame in seq
                 num_frame = 0
-                seq_path = os.path.join(os.path.dirname(self.gt_fol), "training/image_02", seq[-4:])
+                seq_path = os.path.join(os.path.dirname(self.gt_fol), "image_02", seq[-4:])
                 for root, dirs, files in os.walk(seq_path):
                     for file in files:
                         if fnmatch.fnmatch(file, "*.png"):
                             num_frame += 1
                 seq_lengths[seq] = num_frame
 
-                # Get num_of_frame_having_det in seq
-                frame_with_dets = []
-                label_path = os.path.join(self.gt_fol, "image_02", seq[-4:])
-                for root, dirs, files in os.walk(label_path):
-                    for file in files:
-                        if fnmatch.fnmatch(file, "0*.txt"):
-                            frame_with_dets += [int(file[:-4])]
-                frame_with_dets.sort()
-                frames_with_dets[seq] = frame_with_dets
-
-                # Get frame_size
-                seq_path = os.path.join(os.path.dirname(self.gt_fol), "training/image_02", seq[-4:])
-                for root, dirs, files in os.walk(seq_path):
-                    for file in files:
-                        if fnmatch.fnmatch(file, "*.png"):
-                            file_path = os.path.join(root, file)
-                            # Open the image and get its size
-                            with Image.open(file_path) as img:
-                                width, height = img.size
-                                frame_size = (width, height)
-                            break
-                    if frame_size:
-                        break
                 if not self.data_is_zipped:
-                    curr_file = os.path.join(self.gt_fol, 'image_02', seq[-4:])
+                    curr_file = os.path.join(self.gt_fol, seq[-4:])
                     if not os.path.isdir(curr_file):
                         raise TrackEvalException('GT folder not found: ' + os.path.basename(curr_file))
             if self.data_is_zipped:
                 curr_file = os.path.join(self.gt_fol, 'data.zip')
                 if not os.path.isdir(curr_file):
                     raise TrackEvalException('GT folder not found: ' + os.path.basename(curr_file))
-        return seq_list, seq_lengths, frames_with_dets, frame_size
+        return seq_list, seq_lengths
 
     def _load_raw_file(self, tracker, seq, is_gt):
         """Load a file (gt or tracker) in the kitti 2D box format
@@ -178,60 +157,39 @@ class ReferKitti2DBox(_BaseDataset):
         else:
             zip_file = None
             if is_gt:
-                file = os.path.join(self.gt_fol, 'image_02', seq[-4:])
+                file = os.path.join(self.gt_fol, seq[6:10], 'gt', seq[11:] + '.txt')
             else:
                 file = os.path.join(self.tracker_fol, tracker, self.tracker_sub_fol, seq + '.txt')
         # Load raw data from text file
         if is_gt:
-            combined_file = os.path.join(file, "combine.txt")
-            if not os.path.isfile(combined_file):
-                print("Combine all labels of all frames to create ", combined_file)
-                # List all .txt files in the directory
-                txt_files = [f for f in os.listdir(file) if f.endswith('.txt') and f != "combine.txt"]
-                # Sort files numerically (assuming filenames are numbers with zero padding)
-                txt_files.sort()
-                # Open the output file in write mode and concatenate all .txt files
-                with open(combined_file, 'w') as outfile:
-                    for filename in txt_files:
-                        file_path = os.path.join(file, filename)
-                        with open(file_path, 'r') as infile:
-                            for line in infile:
-                                # Split the line into parts
-                                parts = line.strip().split()
-                                # Insert the filename ID as the second element
-                                modified_line = [str(int(filename[:-4]))] + parts[1:]
-                                outfile.write(" ".join(modified_line) + "\n")
-            file = combined_file
-
             read_data, ignore_data = self._load_simple_text_file(file, time_col=0, id_col=1, remove_negative_ids=True,
-                                                                 valid_filter=None,
-                                                                 crowd_ignore_filter=None,
-                                                                 convert_filter=None,
-                                                                 is_zipped=self.data_is_zipped, zip_file=zip_file)   
+                                                                    valid_filter=None,
+                                                                    crowd_ignore_filter=None,
+                                                                    convert_filter=None,
+                                                                    is_zipped=self.data_is_zipped, zip_file=zip_file)   
         else:
+            # Ignore regions
+            crowd_ignore_filter = {2: ['dontcare']}
 
             # Valid classes
-            valid_filter = {2: [x for x in self.class_list]}
+            valid_filter = {2: ['car', 'pedestrian']}
 
             # Convert kitti class strings to class ids
             convert_filter = {2: self.class_name_to_class_id}
 
             read_data, ignore_data = self._load_simple_text_file(file, time_col=0, id_col=1, remove_negative_ids=True,
                                                                  valid_filter=valid_filter,
-                                                                 crowd_ignore_filter=None,
+                                                                 crowd_ignore_filter=crowd_ignore_filter,
                                                                  convert_filter=convert_filter,
                                                                  is_zipped=self.data_is_zipped, zip_file=zip_file)        
             
         
         # Convert data to required format
-        num_timesteps = self.seq_lengths[seq]
-        frames_with_dets = self.frames_with_dets[seq]
+        num_timesteps = self.seq_lengths[seq[:10]]
         if is_gt:
             data_keys = ['ids', 'dets']
-            data_keys += ['gt_crowd_ignore_regions', 'gt_extras']
         else:
             data_keys = ['ids', 'classes', 'dets']
-            data_keys += ['tracker_confidences']
         raw_data = {key: [None] * num_timesteps for key in data_keys}
 
         for t in range(num_timesteps):
@@ -258,19 +216,7 @@ class ReferKitti2DBox(_BaseDataset):
         for k, v in key_map.items():
             raw_data[v] = raw_data.pop(k)
         raw_data['num_timesteps'] = num_timesteps
-        raw_data['frames_with_dets'] = frames_with_dets
         raw_data['seq'] = seq
-        if is_gt:
-            width, height = self.frame_size
-            frame_size = [width, height, width, height]
-            raw_data['gt_dets'] = [a * frame_size for a in raw_data['gt_dets']]
-
-            gt_dets_converted = []
-            for arr in raw_data['gt_dets']:
-                converted = np.array([[x, y, x + w, y + h] for x, y, w, h in arr])
-                gt_dets_converted.append(converted)
-            raw_data['gt_dets'] = gt_dets_converted
-
         return raw_data
 
     @_timing.time
@@ -369,7 +315,6 @@ class ReferKitti2DBox(_BaseDataset):
         data['num_tracker_ids'] = len(unique_tracker_ids)
         data['num_gt_ids'] = len(unique_gt_ids)
         data['num_timesteps'] = raw_data['num_timesteps']
-        data['frames_with_dets'] = raw_data['frames_with_dets']
         data['seq'] = raw_data['seq']
 
         # Ensure that ids are unique per timestep.
@@ -378,5 +323,5 @@ class ReferKitti2DBox(_BaseDataset):
         return data
 
     def _calculate_similarities(self, gt_dets_t, tracker_dets_t):
-        similarity_scores = self._calculate_box_ious(gt_dets_t, tracker_dets_t, box_format='x0y0x1y1')
+        similarity_scores = self._calculate_box_ious(gt_dets_t, tracker_dets_t, box_format='xywh')
         return similarity_scores

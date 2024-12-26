@@ -17,3 +17,5 @@
 /datasets/
 CLIP
 ClipModel
+/src/models/reid/fastreid_models.py
+**.sh

@@ -893,7 +893,9 @@ class ReferKITTISeqProcessor:
         self.det_df['detection_id'] = np.arange(self.det_df.shape[0])  # Unique detection ids
 
         unique_id = self.det_df['id'].unique()
+        unique_id = np.sort(unique_id)[1:]
         label_mapping = {label: i for i, label in enumerate(unique_id)}
+        label_mapping[-1] = -1
         self.det_df['id'] = torch.tensor([label_mapping[label] for label in self.det_df['id']])
 
     def _assign_gt(self):
@@ -906,6 +908,7 @@ class ReferKITTISeqProcessor:
         gt_id = np.unique(self.gt_df['id'])
         existed_id = {a:True for a in gt_id}
         iter = 0
+        convert = {}
 
         def _find_new_iter(iter):
             iter += 1
@@ -918,7 +921,7 @@ class ReferKITTISeqProcessor:
         if self.det_df.seq_info_dict['has_gt'] and not self.det_df.seq_info_dict['is_gt']:
             print(f"Assigning ground truth identities to detections to sequence {self.seq_name}")
             for frame in self.det_df['frame'].unique():
-                frame_detects = self.det_df.loc[(self.det_df.frame == frame) & (self.det_df['id'] != 0)]
+                frame_detects = self.det_df.loc[self.det_df.frame == frame]
                 frame_gt = self.gt_df[self.gt_df.frame == frame]
 
                 # Compute IoU for each pair of detected / GT bounding box
@@ -937,8 +940,14 @@ class ReferKITTISeqProcessor:
                 self.det_df.loc[assigned_detect_ixs_index, 'id'] = assigned_detect_ixs_ped_ids
                 # self.det_df.loc[unassigned_detect_ixs_index, 'id'] = -1  # False Positives
                 for i in unassigned_detect_ixs_index:
-                    iter = _find_new_iter(iter)
-                    self.det_df.loc[i, 'id'] = iter
+                    if self.det_df.loc[i, 'id'] == -1:
+                        continue
+                    if self.det_df.loc[i, 'id'] in convert:
+                        self.det_df.loc[i, 'id'] = convert[self.det_df.loc[i, 'id']]
+                    else:
+                        iter = _find_new_iter(iter)
+                        convert[self.det_df.loc[i, 'id']] = iter
+                        self.det_df.loc[i, 'id'] = iter
 
         self.det_df['id'] = self.det_df['id'].astype(int)
 
@@ -958,10 +967,24 @@ class ReferKITTISeqProcessor:
 
         # Repeat for gt
         if self.det_df.seq_info_dict['has_gt']:
-            processed_gt_path = osp.join(self.det_df.seq_info_dict['seq_path'], 'processed_refer_data', 'gt')
+            processed_gt_path = osp.join(training_path, 'processed_refer_data', self.det_df.seq_info_dict['seq'][-4:], 'gt')
             os.makedirs(processed_gt_path, exist_ok=True)
-            gt_df_path = osp.join(processed_gt_path, 'gt_df' + '.pkl')
-            self.gt_df.to_pickle(gt_df_path)
+            for text, value in self.text_dict.items():
+                valid_rows = []
+                for frame, valid_ids in value['label'].items():
+                    frame = int(frame)
+                    valid_ids = [int(a) for a in valid_ids]
+                    valid_rows.extend(self.gt_df[(self.gt_df['frame'] == frame) & (self.gt_df['id'].isin(valid_ids))][['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']].values.tolist())
+                
+                # Tạo DataFrame từ danh sách các hàng hợp lệ
+                filtered_df = pd.DataFrame(valid_rows, columns=['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height'])
+                filtered_df['frame'] = filtered_df['frame'].astype(int)
+                filtered_df['id'] = filtered_df['id'].astype(int)
+                filtered_df = filtered_df.sort_values(by=['frame', 'id'])
+
+                # Lưu DataFrame vào file txt
+                path = osp.join(processed_gt_path, text + '.txt')
+                filtered_df.to_csv(path, sep=' ', index=False, header=False)
 
     def _store_txts(self):
         """

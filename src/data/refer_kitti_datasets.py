@@ -31,12 +31,15 @@ class ReferKITTISceneDataset:
         # Do 512 frame sẽ được sử dụng trong 1 graph, nên phải lấy những tập chứa đúng 512 frames có thể đưa vào
         # Mỗi lần sẽ cách ra 1 khoảng config.train_dataset_frame_overlap (default: 20)
         # (VD: (1, 512), (21, 532), (41, 552), ...)
-        self.seq_with_frames_and_text = self._index_dataset()
+        self.seq_and_frames = self._index_dataset()
 
         # Sparse index per sequence for val and test datasets
         # Tương tự như _index_dataset, tuy nhiên mỗi tập sẽ chồng lấn lên nhau một tỉ lệ bằng config.evaluation_graph_overlap_ratio (default: 0.5)
         if self.mode in ('val', 'test'):
             self.sparse_frames_per_seq = self._sparse_index_dataset()
+            for seq in self.seq_det_dfs:
+                df = self.seq_det_dfs[seq]
+                self.seq_det_dfs[seq] = df[df['id'] != -1]
             
 
     def _load_seq_dfs(self):
@@ -69,12 +72,11 @@ class ReferKITTISceneDataset:
         """
         Index the dataset in a form that we can sample
         """
-        seq_with_frames_and_text = []
+        seq_and_frames = []
         # Loop over the scenes
         for scene in self.seq_names:
             # Get scene specific dataframe
             scene_df = self.seq_det_dfs[scene]
-            text_dict = self.text_dicts[scene]
             frames_per_graph = self.config.frames_per_graph # default: 512: Số frame được đưa vào 1 graph
 
             # Scene specific values
@@ -91,17 +93,11 @@ class ReferKITTISceneDataset:
                     # Each frame can be a start and end frame only once. To prevent (1, 30), (2, 30) ... (29, 30)
                     if (graph_df.frame.min() not in start_frames) and (graph_df.frame.max() not in end_frames) and (
                             len(graph_df.frame.unique()) >= 2):
-                        for text in text_dict.keys():
-                            seq_with_frames_and_text.append((scene, graph_df.frame.min(), graph_df.frame.max(), text))
-                            start_frames.append(graph_df.frame.min())
-                            end_frames.append(graph_df.frame.max())
+                        seq_and_frames.append((scene, graph_df.frame.min(), graph_df.frame.max()))
+                        start_frames.append(graph_df.frame.min())
+                        end_frames.append(graph_df.frame.max())
 
-        # half_length = len(tuple(seq_with_frames_and_text)) // 2
-        # import random
-        # random_sample = tuple(random.sample(tuple(seq_with_frames_and_text), half_length))
-
-        # return random_sample
-        return tuple(seq_with_frames_and_text)
+        return tuple(seq_and_frames)
 
     def _sparse_index_dataset(self):
         """
@@ -212,7 +208,84 @@ class ReferKITTISceneDataset:
 
         return graph_df, seq_info_dict
 
-    def get_graph_from_seq_and_frames(self, seq_name, start_frame, end_frame, text):
+
+    def get_graph_from_seq_and_frames(self, seq_name, start_frame, end_frame):
+        """
+        Main dataloading function. Returns a hierarchical graph belonging to the specified sequence range
+        Hàm chính để xử lý các video thành dạng graph
+        """
+
+        # :graph_df: Df chứa thông tin các detection từ start_frame đến end_frame
+        graph_df, seq_info_dict = self.get_df_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame)
+
+
+        # Ensure that there are at least 2 frames in the sampled graph
+        assert len(graph_df['frame'].unique()) > 1, "There aren't enough frames in the sampled graph. Either 0 or 1"
+
+        # Data augmentation
+        if self.mode=='train' and self.config.augmentation:
+            augmentor = GraphAugmentor(graph_df=graph_df, config=self.config)
+            graph_df = augmentor.augment()
+
+        # Load appearance data
+        x_reid = self._load_precomputed_embeddings(det_df=graph_df, seq_info_dict=seq_info_dict,
+                                                   embeddings_dir=self.config.reid_embeddings_dir)
+        
+        x_node = self._load_precomputed_embeddings(det_df=graph_df, seq_info_dict=seq_info_dict,
+                                                    embeddings_dir=self.config.node_embeddings_dir)
+
+
+        # Copy node frames and ground truth ids from the dataframe
+        x_frame = torch.tensor(graph_df[['detection_id', 'frame']].values)
+        x_bbox = torch.tensor(graph_df[['detection_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']].values)
+        x_feet = torch.tensor(graph_df[['detection_id', 'feet_x', 'feet_y']].values)
+        y_id = torch.tensor(graph_df[['detection_id', 'id']].values)
+
+        # Assert that order of all the loaded values are the same
+        assert (x_reid[:, 0].numpy() == y_id[:, 0].numpy()).all() and \
+               (x_node[:, 0].numpy() == y_id[:, 0].numpy()).all() and \
+               (x_frame[:, 0].numpy() == y_id[:, 0].numpy()).all() and \
+               (x_bbox[:, 0].numpy() == y_id[:, 0].numpy()).all() and \
+               (x_feet[:, 0].numpy() == y_id[:, 0].numpy()).all(), "Feature and id mismatch while loading"
+
+        # Get rid of the detection id index
+        x_reid = x_reid[:, 1:]
+        x_node = x_node[:, 1:]
+        x_frame = x_frame[:, 1:]
+        x_bbox = x_bbox[:, 1:]
+        x_center = x_bbox[:, :2] + 0.5* x_bbox[:, 2:]
+        x_feet = x_feet[:, 1:]
+        y_id = y_id[:, 1:]
+
+        if self.config.l2_norm_reid:
+            x_reid = F.normalize(x_reid, dim = -1, p=2)
+            x_node = F.normalize(x_node, dim = -1, p=2)
+
+        # Further important parameters to pass
+        fps = torch.tensor(seq_info_dict['fps'])
+        frames_total = torch.tensor(self.config.frames_per_graph)
+        frames_per_level = torch.tensor(self.config.frames_per_level)
+        start_frame = torch.tensor(start_frame)
+        end_frame = torch.tensor(end_frame)
+
+        # Create the object with float32 and int64 precision and send to the device
+        # :x_reid: Embedding reid
+        # :x_node: Embedding node
+        # :x_frame: Các frame tương ứng với các detection
+        # :x_bbox: Giá trị của bounding box (x, y, w, h)
+        # :x_feet: Toạ độ chân của bounding box (x, y)
+        # :x_center: Tâm của bbox
+        # :y_id: ID của bounding box sau khi đã so với groundtruth
+        hierarchical_graph = HierarchicalGraph(x_reid=x_reid.float(), x_node=x_node.float(), x_frame=x_frame.long(),
+                                               x_bbox=x_bbox.float(), x_feet=x_feet.float(), x_center=x_center.float(), 
+                                               y_id=y_id.long(), fps=fps.long(), frames_total=frames_total.long(),
+                                               frames_per_level=frames_per_level.long(), 
+                                               start_frame=start_frame.long(), end_frame=end_frame.long())
+
+        return hierarchical_graph
+
+
+    def get_graph_from_seq_and_frames_and_text(self, seq_name, start_frame, end_frame, text):
         """
         Main dataloading function. Returns a hierarchical graph belonging to the specified sequence range
         Hàm chính để xử lý các video thành dạng graph
@@ -282,8 +355,8 @@ class ReferKITTISceneDataset:
 
         # get some most similar ones
         top_values, top_indices = torch.topk(logits_per_image.t(), self.config.top_k_node_for_text)
-        mask = torch.ones(logits_per_image.t()[0].size(), dtype=torch.bool)
-        mask[top_indices] = False
+        mask = torch.zeros(logits_per_image.t()[0].size(), dtype=torch.bool)
+        mask[top_indices] = True
 
         det_id = det_id[mask]
         x_reid = x_reid[mask]
@@ -320,8 +393,8 @@ class ReferKITTISceneDataset:
         return hierarchical_graph
 
     def __len__(self):
-        return len(self.seq_with_frames_and_text)
+        return len(self.seq_and_frames)
 
     def __getitem__(self, ix):
-        seq_name, start_frame, end_frame, text = self.seq_with_frames_and_text[ix]
-        return self.get_graph_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, text=text)
+        seq_name, start_frame, end_frame = self.seq_and_frames[ix]
+        return self.get_graph_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame)

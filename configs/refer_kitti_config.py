@@ -108,21 +108,21 @@ def get_arguments(args=None):
     parser.add_argument('--text_file', help='Text file to use', type=str, default='text')
     parser.add_argument('--text_embeddings_dir', help='Storage directory of text embeddings', type=str, default='text_clip')
     parser.add_argument('--node_embeddings_clip_dir', help='Storage directory of node embeddings', type=str, default='node_clip_ViT_B_32')
-    parser.add_argument('--top_k_node_for_text', help='Most similar detection with the text', type=int, default=64)
+    parser.add_argument('--top_k_node_for_text', help='Most similar detection with the text', type=int, default=150)
 
     # EMBEDDING DIRECTORIES
     parser.add_argument('--reid_embeddings_dir', help='Storage directory of reid embeddings', type=str, default='reid_fastreid_msmt_BOT_R50_ib')
     parser.add_argument('--node_embeddings_dir', help='Storage directory of node embeddings', type=str, default='node_fastreid_msmt_BOT_R50_ib')
 
     # TRAINING
-    parser.add_argument('--num_epoch', help='Number of epochs for training', type=int, default=10)
+    parser.add_argument('--num_epoch', help='Number of epochs for training', type=int, default=150)
     parser.add_argument('--num_batch', help='Number of graphs per mot_sub_folder', type=int, default=3)
     parser.add_argument('--lr', help='Learning rate', type=float, default=0.0003)  # MPNTrack param
     parser.add_argument('--gamma', help='Focal loss gamma parameter', type=float, default=1)
     parser.add_argument('--weight_decay', help='Weight decay', type=float, default=0.0001)  # MPNTrack param
     parser.add_argument('--augmentation', help='Perform data augmentation during training', dest='augmentation', action='store_true')
-    parser.add_argument('--train_dataset_frame_overlap', help='Most frames to overlap for different datapoints', type=int, default=30)
-    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=2) # Don't start evaluating bf all layers are unfrozen!
+    parser.add_argument('--train_dataset_frame_overlap', help='Most frames to overlap for different datapoints', type=int, default=20)
+    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=120) # Don't start evaluating bf all layers are unfrozen!
     parser.add_argument('--no_fp_loss', help='Do not compute a loss for FPs', dest='no_fp_loss', action='store_true', default=False) 
 
 
@@ -154,7 +154,7 @@ def get_arguments(args=None):
     parser.add_argument('--hicl_depth', help='The depth of the hierarchical architecture', type=int, default=7)
     parser.add_argument('--node_id_min_ratio', help='Min percentage of the most common id for hicl layers gt assignment', type=float, default=0.5)
     parser.add_argument('--depth_pretrain_iteration', help='Number of iterations before unlocking next level', type=int,
-                        default=1000)
+                        default=800)
 
     # MOTION SETTING
     parser.add_argument('--motion_max_length', type=int, nargs='*', help='Maximum number of frames used to encode trajectories before pred at each layer', default=[2, 4, 8, 16, 32, 64])
@@ -201,7 +201,7 @@ def post_config(config):
 
     # Dataframe Columns to keep in order to produce a tracking output
     config.VIDEO_COLUMNS = ['frame_path', 'frame', 'name', 'truncation', 'occlusion', 'direction', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'bb_right', 'bb_bot']  # Columns to save in the output df
-    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'name', 'truncation', 'occlusion', 'direction', 'bb_left', 'bb_top', 'bb_right', 'bb_bot', 'conf', 'x', 'y', 'z']  # MotCha output format
+    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'name', 'truncation', 'occlusion', 'direction', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'conf', 'x', 'y', 'z']  # MotCha output format
 
     # Motion things
     config.do_motion = max(config.mpn_use_motion)

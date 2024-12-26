@@ -39,7 +39,7 @@ from multiprocessing import freeze_support
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import trackeval  # noqa: E402
 
-def evaluate_refer_kitti(tracker_path, split, data_path, tracker_sub_folder, output_sub_folder):
+def evaluate_refer_kitti(tracker_path, split, data_path, tracker_sub_folder, output_sub_folder, text):
     """
     Evaluate KITTI using TrackEval toolkit
     """
@@ -69,12 +69,12 @@ def evaluate_refer_kitti(tracker_path, split, data_path, tracker_sub_folder, out
     dataset_config['TRACKER_DISPLAY_NAMES'] = ['HICL-Tracker']
 
     dataset_config['TRACKERS_TO_EVAL'] = [tracker_path]
-    dataset_config['GT_FOLDER'] = os.path.join(data_path, dataset, 'labels_with_ids')
-    dataset_config['DATASET_FOLDER'] = os.path.join(data_path, "KITTI", "training")
+    dataset_config['GT_FOLDER'] = os.path.join(data_path, "KITTI", "training", "processed_refer_data")
     dataset_config['SPLIT_TO_EVAL'] = split
     dataset_config['SEQMAP_FILE'] = os.path.join(data_path, dataset, 'seqmaps', split+'.txt')
     dataset_config['TRACKER_SUB_FOLDER'] = tracker_sub_folder
     dataset_config['OUTPUT_SUB_FOLDER'] = output_sub_folder
+    dataset_config['TEXT_DICT'] = text
 
     # Run code
     evaluator = trackeval.Evaluator(eval_config)
