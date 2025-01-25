@@ -14,8 +14,8 @@ from torch.utils.data import DataLoader
 import torch
 from lapsolver import solve_dense
 import clip
-from torchvision.transforms import ToPILImage
 from scipy.optimize import linear_sum_assignment
+import torchvision
 
 from src.data.mot_challenge.mot17 import get_mot_gt, get_mot_det_df_from_gt, get_mot_det_df_from_det
 from src.data.dancetrack.dancetrack import get_dancetrack_gt, get_dancetrack_det_df_from_det
@@ -1083,7 +1083,7 @@ class ReferKITTISeqProcessor:
             # Feed them to the model
             self.feature_embedding_model.eval()
             self.clip_embedding_model.eval()
-            node_embeds, reid_embeds, node_embeds_clip = [], [], []  # Node: before fc layers (2048), reid after fc layers (256)
+            node_embeds, reid_embeds, node_embeds_clip = [], [], [] 
             frame_nums, det_ids = [], []
             with torch.no_grad():
                 # FASTREID
@@ -1209,8 +1209,13 @@ class ReferKITTISeqProcessor:
         print("REID ARCH??")
         if self.config.reid_arch == 'resnet50_fc512':
             print("RESNET 50 fc512!!")
-            feature_embedding_model = resnet50_fc512(num_classes=1000, loss='xent', pretrained=True).to(self.config.device)
-            load_pretrained_weights(feature_embedding_model, self.config.feature_embedding_model_path)
+            feature_embedding_model = resnet50_fc512(num_classes=512, loss='xent', pretrained=True).to(self.config.device)
+            transforms = torchvision.transforms.Compose([
+                torchvision.transforms.Resize((224, 224)),  # Thay đổi kích thước
+                torchvision.transforms.ToTensor(),           # Chuyển đổi ảnh thành tensor
+                torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            # load_pretrained_weights(feature_embedding_model, self.config.feature_embedding_model_path)
 
         elif self.config.reid_arch.startswith('fastreid_'):
             print("FASTREID MODEL!!")

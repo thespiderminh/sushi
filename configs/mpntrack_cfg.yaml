@@ -42,6 +42,13 @@ graph_model_params:
     dropout_p: 0
     use_batchnorm: False
 
+  node_classifier_feats_dict:
+    node_in_dim: 16
+    node_fc_dims: [8]
+    node_out_dim: 1
+    dropout_p: 0
+    use_batchnorm: False
+
   cnn_params:
     arch: resnet50
     model_weights_path:

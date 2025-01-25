@@ -424,4 +424,4 @@ class MOTMPNet(nn.Module):
         if self.hicl_feats_encoder is not None:
             outputs_dict['node_feats']= self.hicl_feats_encoder.post_mpn_encode_node_feats(latent_node_feats, hicl_feats, initial_node_feats)
 
-        return outputs_dict
+        return outputs_dict, latent_node_feats

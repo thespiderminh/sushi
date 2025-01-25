@@ -376,12 +376,16 @@ class HierarchicalGraph(Data):
                             # Graph related
                             'x_node',  # Node features that will be processed
                             'x_reid',  # ReID features to calculate edge connections
+                            'x_node_clip',  # Node features through CLIP model, used for node classifying
+                            'x_text',  # text features through CLIP model, used for node classifying
+                            "x_similarity", # similarity between x_node_clip and x_text
                             'x_frame',  # Frame number of the detection
                             'x_one_hot_frame',  # Frame numbers - one hot encoded
                             'x_bbox',  # Bounding box coordinates of the node (left, top, W, H)
                             'x_center',  # Bonuding box center coordinates of the node
                             'x_feet',  # Further bbox coordinates (feet_x, feet_y)
                             'y_id',  # GT identity of the node
+                            'y',  # GT if the node is suitable for text
 
                             # Scene related
                             'fps',  # FPS of the sequence

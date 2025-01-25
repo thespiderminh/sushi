@@ -51,6 +51,22 @@ def get_refer_kitti_det_df(seq_name, data_root_path, config):
     first_image_path = det_df.loc[0, 'frame_path']
     first_image = cv2.imread(first_image_path)
     height, width, layers = first_image.shape
+    
+    # Get all text
+    text_df = {}
+    total_valid_det = 0
+    num_text = 0
+    expression_path = osp.join(osp.dirname(osp.dirname(data_root_path)), "expression", seq_name[-4:])
+    for filename in sorted(os.listdir(expression_path)):
+        if filename.endswith(".json"):
+            file_path = os.path.join(expression_path, filename)
+            # Read each file into a list of rows
+            with open(file_path, 'r') as file:
+                data = json.load(file)
+                for key, value in data['label'].items():
+                    total_valid_det += len(value)
+                num_text += 1
+                text_df[filename[:-5]] = data
 
     # Build scene info dictionary
     seq_info_dict = {'seq': seq_name,
@@ -59,20 +75,12 @@ def get_refer_kitti_det_df(seq_name, data_root_path, config):
                      'frame_height': height,
                      'frame_width': width,
                      'seq_len': num_frame,
+                     'total_det': len(det_df),
+                     'total_valid_det': total_valid_det,
+                     'num_text': num_text,
                      'fps': 30,
                      'has_gt': True,
                      'is_gt': False}
-    
-    # Get all text
-    text_df = {}
-    expression_path = osp.join(osp.dirname(osp.dirname(data_root_path)), "expression", seq_name[-4:])
-    for filename in sorted(os.listdir(expression_path)):
-        if filename.endswith(".json"):
-            file_path = os.path.join(expression_path, filename)
-            # Read each file into a list of rows
-            with open(file_path, 'r') as file:
-                data = json.load(file)        
-                text_df[filename[:-5]] = data
 
     # return det_df, seq_info_dict
     return det_df, seq_info_dict, text_df
@@ -153,16 +161,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     config = parser.parse_args()
     config.det_file = 'det'
-    a = get_refer_gt(seq_name="refer-0000", 
-                            data_root_path="/data/hpc/ngocminh/SUSHI/datasets/KITTI/training/image_02", 
-                            config=config)
-    print("Refer")
-    print(a[a['frame'] == 0][['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']])
+    # a = get_refer_gt(seq_name="refer-0000", 
+    #                         data_root_path="/data/hpc/ngocminh/SUSHI/datasets/KITTI/training/image_02", 
+    #                         config=config)
+    # print("Refer")
+    # print(a[a['frame'] == 0][['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']])
     a, b, text = get_refer_kitti_det_df(seq_name="refer-0000", 
                             data_root_path="/data/hpc/ngocminh/SUSHI/datasets/KITTI/training/image_02", 
                             config=config)
     print("Normal")
     print(a[a['frame'] == 0][['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']])
+    print(b)
     # pd.set_option('display.max_rows', None)
     # print(a[a['frame'] == 463])
     # print(b)

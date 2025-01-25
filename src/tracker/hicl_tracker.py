@@ -1,20 +1,24 @@
 from pickletools import optimize
+import shutil
+import wandb
 import yaml
 import torch.optim as optim
 from torch_geometric.data import Batch
+from src.models.nodeclassify import MLPClassifier
 from src.models.mpntrack import MOTMPNet
 from src.models.hiclnet import HICLNet
 from src.models.motion.linear import LinearMotionModel
 from src.utils.deterministic import seed_worker, seed_generator
 from src.data.mot_datasets import MOTSceneDataset
 from src.data.kitti_datasets import KITTISceneDataset
-from src.data.refer_kitti_datasets import ReferKITTISceneDataset
+from src.data.refer_kitti_datasets import ReferKITTISceneDataset, NodeClassifierDataset
 from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 import torch
 from src.utils.graph_utils import to_undirected_graph, to_lightweight_graph, to_positive_decision_graph
 from src.utils.motion_utils import compute_giou_fwrd_bwrd_motion_sim
 from src.tracker.projectors import GreedyProjector, ExactProjector
+from src.data.refer_kitti_datasets import add
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 import numpy as np
@@ -37,6 +41,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 _EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti, 'refer': evaluate_refer_kitti}
 _METRICS_FUNC = {'mot17': 'MotChallenge2DBox', 'kitti': 'Kitti2DBox', 'refer': 'ReferKitti2DBox'}
 _DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': ReferKITTISceneDataset}
+# _DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': NodeClassifierDataset}
 
 class HICLTracker:
     """
@@ -54,6 +59,10 @@ class HICLTracker:
 
         # Load the model (currently MPNTrack)
         self.model = self._get_model()
+        self.node_classify_model = MLPClassifier(input_dim=self.config.mlp_input_dim,
+                                                 fc_dims=self.config.mlp_fc_dims,
+                                                 dropout_p=self.config.mlp_drop_out,
+                                                 use_batchnorm=self.config.mlp_batch_norm).to(self.config.device)
 
         if self.config.do_motion:
             self.motion_model = LinearMotionModel()
@@ -68,9 +77,9 @@ class HICLTracker:
             self.loss_function = FocalLoss(logits=True, gamma=self.config.gamma)
             self.train_dataloader = self._get_train_dataloader()
             self.optimizer = self._get_optimizer()
-            # Get validation dataset if exists
-            if self.val_split:
-                self.val_dataset = self._get_dataset(mode='val')
+        # Get validation dataset if exists
+        if self.val_split:
+            self.val_dataset = self._get_dataset(mode='val')
 
         # Testing - Set up the dataset
         elif self.config.experiment_mode == 'test':
@@ -91,6 +100,8 @@ class HICLTracker:
         #if self.config.tensorboard:
         if self.config.experiment_mode == 'train':
             self.logger = SummaryWriter(osp.join(self.config.experiment_path, 'tf_logs'))
+
+        self.highest_hota = 0
 
     def _get_model(self):
         """
@@ -180,7 +191,7 @@ class HICLTracker:
         pretrained_model = self._get_model()
 
         # Load weights
-        pretrained_model.load_state_dict(torch.load(self.config.hicl_model_path))
+        pretrained_model.load_state_dict(torch.load(self.config.hicl_model_path, map_location=self.config.device))
         pretrained_model.train()  # Put in training mode for now
 
         return pretrained_model
@@ -335,6 +346,10 @@ class HICLTracker:
                     print("Frozen layers are unlocked! Current active training depth is:", self.active_train_depth)
                     print("*****")
 
+            train_batch.cpu()
+            for i in hicl_graphs:
+                i.cpu()
+
         self.train_epoch += 1
 
         return logs
@@ -405,7 +420,7 @@ class HICLTracker:
                                                                 logs=logs[curr_depth])
                 else:
                     # Graph based forward pass
-                    outputs = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
+                    outputs, _ = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
                     
                     # Produce decisions
                     curr_batch.edge_preds = torch.sigmoid(outputs['classified_edges'][-1].view(-1).detach())
@@ -423,7 +438,10 @@ class HICLTracker:
                         
                         logs["Loss_per_Depth"][curr_depth].append(loss_curr_depth.detach().item())  # log the curr loss
 
+            # print('-----------')
+            # print("cached_memory = ", torch.cuda.memory_reserved(self.config.device) / (1024**2), " MB")
             graph_data_list = curr_batch.to_data_list()
+            # print("cached_memory = ", torch.cuda.memory_reserved(self.config.device) / (1024**2), " MB")
             if mode != 'train':
                 assert len(graph_data_list) == 1, "Track batch size is greater than 1"
 
@@ -500,6 +518,44 @@ class HICLTracker:
                         tag = '/'.join(['val', 'mot', metric_name])
                         self.logger.add_scalar(tag, metric_val, global_step=self.train_iteration)
 
+    def _log_tb_mot_metrics_on_wandb(self, mot_metrics):
+        path = list(mot_metrics[self.metrics_func].keys())[0]
+        _METRICS_GROUPS = ['HOTA', 'CLEAR', 'Identity']
+        _METRICS_TO_LOG = ['HOTA','AssA', 'DetA', 'MOTA', 'IDF1']
+        cls = mot_metrics[self.metrics_func][path]['COMBINED_SEQ'].keys()
+        metrics_ = mot_metrics[self.metrics_func][path]['COMBINED_SEQ'][list(cls)[0]]
+        for metrics_group_name in _METRICS_GROUPS:
+            group_metrics = metrics_[metrics_group_name]
+            for metric_name, metric_val in group_metrics.items():
+                if metric_name in _METRICS_TO_LOG:
+                    if isinstance(metric_val, np.ndarray):
+                        metric_val = np.mean(metric_val)
+                    wandb.log({"epoch": self.train_epoch, metric_name: metric_val})
+
+    def _save_highest_hota_model(self, mot_metrics):
+        path = list(mot_metrics[self.metrics_func].keys())[0]
+        _METRICS_GROUPS = ['HOTA',]
+        _METRICS_TO_LOG = ['HOTA',]
+        cls = mot_metrics[self.metrics_func][path]['COMBINED_SEQ'].keys()
+        metrics_ = mot_metrics[self.metrics_func][path]['COMBINED_SEQ'][list(cls)[0]]
+        for metrics_group_name in _METRICS_GROUPS:
+            group_metrics = metrics_[metrics_group_name]
+            for metric_name, metric_val in group_metrics.items():
+                if metric_name in _METRICS_TO_LOG:
+                    if isinstance(metric_val, np.ndarray):
+                        metric_val = np.mean(metric_val)
+                    if metric_val > self.highest_hota:
+                        self.highest_hota = metric_val
+
+                        folder_path = self.config.sushi_model_folder
+                        # Xóa thư mục nếu tồn tại
+                        if os.path.exists(folder_path):
+                            shutil.rmtree(folder_path) # Tạo mới thư mục
+                        os.makedirs(folder_path)
+
+                        file_name = osp.join(folder_path, f"sushi_model_epoch_{self.train_epoch}_{metric_val}.pth")
+                        torch.save(self.model.state_dict(), file_name)
+
 
     def train(self):
         """
@@ -508,11 +564,11 @@ class HICLTracker:
 
         # First calculate the oracle results for validation
         # Kiếm tra chất lượng của mô hình trước khi huấn luyện + kiểm tra việc xử lý data
-        if self.val_split:
-        # if False:
+        # if self.val_split:
+        if False:
             _, _ = self.track(self.val_dataset, output_path=osp.join(self.config.experiment_path, 'oracle'), mode='val', oracle=True)
-            self.eval_func(tracker_path=osp.join(self.config.experiment_path, 'oracle'), split=self.val_split,
-                           data_path=self.config.data_path, tracker_sub_folder=self.config.mot_sub_folder,
+            self.eval_func(tracker_path=osp.join(self.config.experiment_path, 'oracle'),
+                           split=self.val_split, data_path=self.config.data_path, tracker_sub_folder=self.config.mot_sub_folder,
                            output_sub_folder=self.config.mot_sub_folder,text=self.val_dataset.text_dicts)
 
         #raise RuntimeError
@@ -563,10 +619,15 @@ class HICLTracker:
                 mot_metrics= self.eval_func(tracker_path=epoch_path, split=self.val_split, data_path=self.config.data_path,
                                             tracker_sub_folder=self.config.mot_sub_folder, output_sub_folder=self.config.mot_sub_folder,
                                             text=self.val_dataset.text_dicts)[0]
+                self._log_tb_mot_metrics_on_wandb(mot_metrics)
                 self._log_tb_mot_metrics(mot_metrics) 
 
+                self._save_highest_hota_model(mot_metrics)
+
             # Plot losses
+            self._plot_losses_on_wandb(logs)
             self._plot_losses(logs)
+            self._plot_losses_per_depth_on_wandb(logs)
             self._plot_losses_per_depth(logs)
 
             # Save model checkpoint
@@ -599,6 +660,7 @@ class HICLTracker:
                 print("Tracking", seq)
                 # Loop over each datapoint - Equivalent to using a dataloader with batch 1
                 seq_dfs = {}
+                tracking_output = {}
                 for seq_name, start_frame, end_frame, text in seq_with_frames_and_text:
                     # Equivalent to train_batch with a single datapoint
                     # Tạo 1 cái graph cho 1 lần train 512 frames,
@@ -630,6 +692,7 @@ class HICLTracker:
                     # Each Connected Component is a Ped Id. Assign those values to our DataFrame:
                     graph_output_df = graph_df.copy()
                     graph_output_df['ped_id'] = ped_labels
+                    add(tracking_output, [start_frame, end_frame, text], graph_output_df)
                     graph_output_df = graph_output_df[self.config.VIDEO_COLUMNS + ['conf', 'detection_id']].copy()
 
                     # Append the new df
@@ -637,6 +700,11 @@ class HICLTracker:
                         seq_dfs[text].append(graph_output_df)
                     else:
                         seq_dfs[text] = [graph_output_df]
+
+                    # Giải phóng GPU
+                    for i in hicl_graphs:
+                        i.cpu()
+                    data.cpu()
 
                 # Merge the dataframes
                 for text, seq_df_list in seq_dfs.items():
@@ -652,6 +720,13 @@ class HICLTracker:
                     os.makedirs(osp.join(output_path, self.config.mot_sub_folder), exist_ok=True)
                     tracking_file_path = osp.join(output_path, self.config.mot_sub_folder, seq_name + '-' + text + '.txt')
                     self._save_results(df=seq_output_df, output_file_path=tracking_file_path)
+
+                if not oracle:
+                    # Save the df used for final tracking
+                    folder_path = self.config.tracking_output_path
+                    os.makedirs(folder_path, exist_ok=True)
+                    with open(osp.join(folder_path, f"{seq}.pkl"), 'wb') as f:
+                        pickle.dump(tracking_output, f)
 
             print("-----")
             print("Tracking completed!")
@@ -685,6 +760,129 @@ class HICLTracker:
         self.model.train()
 
         return logs_total, logs_all
+
+    def track_with_mlp(self, dataset, output_path, mode='val', mlp_path=None):
+        """
+        Main tracking method. Given a dataset, track every sequence in it and create output files.
+        Track mỗi video được đưa vào qua dataset, và đẩy output ra
+        """
+
+        if mlp_path is not None:
+            self.node_classify_model.load_state_dict(torch.load(mlp_path, map_location=self.config.device))
+
+        # Set the model in the test mode
+        self.model.eval()
+        self.node_classify_model.eval()
+        assert not self.model.training, "Test error: Model is not in evaluation mode"
+
+        # Disable gradients
+        with torch.no_grad():
+
+            # Separate dictionary to bookkeep the logs for each depth network
+            # Chuẩn bị các metrics để in ra
+            logs_all = [{"Loss": [], "TP": [], "FP": [], "TN": [], "FN": [], "CSR": []} for i in range(self.config.hicl_depth)]
+
+            # Loop over sequences
+            for seq, seq_with_frames_and_text in dataset.sparse_frames_per_seq.items():
+                print("Tracking", seq, "with node classifier")
+                # Loop over each datapoint - Equivalent to using a dataloader with batch 1
+                seq_dfs = {}
+                folder_path = self.config.tracking_output_path
+                with open(osp.join(folder_path, f"{seq}.pkl"), 'rb') as file:
+                    tracking_output = pickle.load(file)
+                for seq_name, start_frame, end_frame, text in seq_with_frames_and_text:
+                    # Equivalent to train_batch with a single datapoint
+                    # Tạo 1 cái graph cho 1 lần train 512 frames,
+                    # data là cái HierarchicalGraph chứa embedding ngoại hình của các detection, số frame, bounding box của chúng
+                    data = dataset.get_graph_from_seq_and_frames_and_text(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, text=text)
+                    data.to(self.config.device)
+
+                    # Small trick to utilize torch-geometric built in functions
+                    track_batch = Batch.from_data_list([data])
+                    hicl_graphs = track_batch.to_data_list()
+
+                    outputs = self._track_MLP(graphs=hicl_graphs)
+                    graph_output_df = tracking_output[start_frame][end_frame][text]
+
+                    graph_output_df['used'] = outputs
+                    graph_output_df = graph_output_df[graph_output_df['used'] == 1]
+                    graph_output_df = graph_output_df[self.config.VIDEO_COLUMNS + ['conf', 'detection_id']].copy()
+
+                    # Append the new df
+                    if text in seq_dfs:
+                        seq_dfs[text].append(graph_output_df)
+                    else:
+                        seq_dfs[text] = [graph_output_df]
+
+                    # Giải phóng GPU
+                    for i in hicl_graphs:
+                        i.cpu()
+                    data.cpu()
+
+                # Merge the dataframes
+                for text, seq_df_list in seq_dfs.items():
+                    seq_merged_df = self._merge_subseq_dfs(seq_df_list)
+
+                    # Postprocess the dataframes - drop short trajectories
+                    postprocess = Postprocessor(seq_merged_df.copy(),
+                                                seq_info_dict=dataset.seq_info_dicts[seq_name],
+                                                config=self.config)
+                    seq_output_df = postprocess.postprocess_trajectories()
+
+                    # Save the output
+                    os.makedirs(output_path, exist_ok=True)
+                    tracking_file_path = osp.join(output_path, seq_name + '-' + text + '.txt')
+                    self._save_results(df=seq_output_df, output_file_path=tracking_file_path)
+
+            print("-----")
+            print("Tracking completed!")
+
+            # Print metrics
+            logs_total = {}
+        #     if mode != 'test':
+        #         for i in range(self.config.hicl_depth):
+        #             # Calculate accuracy, precision, recall
+        #             logs = logs_all[i]
+        #             if logs["Loss"]:
+        #                 print("Depth", i+1, "- Metrics:")
+        #                 logs = self._postprocess_logs(logs=logs)
+
+        #         # Total logs - Cumulative of every layer
+        #         print("TOTAL - Metrics:")
+        #         logs_total = {"Loss": [logs_all[i]["Loss"] for i in range(self.config.hicl_depth)],
+        #                       "TP": [logs_all[i]["TP"] for i in range(self.config.hicl_depth)],
+        #                       "FP": [logs_all[i]["FP"] for i in range(self.config.hicl_depth)],
+        #                       "TN": [logs_all[i]["TN"] for i in range(self.config.hicl_depth)],
+        #                       "FN": [logs_all[i]["FN"] for i in range(self.config.hicl_depth)],
+        #                       "CSR": [logs_all[i]["CSR"] for i in range(self.config.hicl_depth)]}
+        #         logs_total["Loss"] = [sum(logs_total["Loss"])]  # To be compatible with train loss (sum of hicl layers)
+        #         logs_total = self._postprocess_logs(logs_total)
+
+        #         print("-----")
+
+
+
+        # # Set the model back in training mode
+        # self.model.train()
+
+        return logs_total, logs_all
+    
+    def _track_MLP(self, graphs):
+        hicl_graphs = graphs.copy()
+        curr_batch, unfit_batch, convert_batch, _ = self._hicl_to_curr(hicl_graphs=hicl_graphs)
+        _, x_node_secondary = self.model(curr_batch, 0)
+        curr_batch.cpu()
+
+        batch = Batch.from_data_list([hicl_graph for hicl_graph in hicl_graphs])
+
+        # Tính output
+        outputs = self.node_classify_model(batch, x_node_secondary)
+        sigmoid = nn.Sigmoid()
+        outputs = sigmoid(outputs)
+        outputs = (outputs.view(-1) > 0.5).float().tolist()
+
+        return outputs
+
 
     def _merge_subseq_dfs(self, subseq_dfs):
         """
@@ -806,6 +1004,17 @@ class HICLTracker:
         print("     TP+FP+TN+FN: ", int((logs["TP"] + logs["FP"] + logs["TN"] + logs["FN"])))
 
         return logs
+    
+    def _plot_losses_on_wandb(self, logs):
+        train_loss = logs['Train_Loss']
+        val_loss = logs['Val_Loss']
+        num_epoch = len(train_loss)
+        wandb.log({"_plot_losses_on_wandb" : wandb.plot.line_series(
+                       xs=[i + 1 for i in range(num_epoch)], 
+                       ys=[train_loss, val_loss],
+                       keys=["Train_Loss", "Val_Loss"],
+                       title='Loss Plot',
+                       xname="Epoch")})
 
     def _plot_losses(self, logs):
         """
@@ -824,6 +1033,25 @@ class HICLTracker:
         plt.xticks(np.arange(len(logs["Train_Loss"])), np.arange(1, len(logs["Train_Loss"]) + 1))
         plt.savefig(osp.join(self.config.experiment_path, 'loss_plots-' + self.train_split + '.png'), bbox_inches='tight')
         plt.close()
+
+    def _plot_losses_per_depth_on_wandb(self, logs):
+        train_loss_per_depth = logs['Train_Loss_per_Depth']
+        val_loss_per_depth = logs['Val_Loss_per_Depth']
+        num_epoch = len(logs['Train_Loss'])
+        ys = []
+        keys = []
+        for j in range(self.config.hicl_depth):
+            ys.append(train_loss_per_depth[j])
+            keys.append(f'Training Loss - Depth {j}')
+            ys.append(val_loss_per_depth[j])
+            keys.append(f'Validation Loss - Depth {j}')
+
+        wandb.log({"_plot_losses_per_depth_on_wandb" : wandb.plot.line_series(
+                       xs=[i + 1 for i in range(num_epoch)], 
+                       ys=ys,
+                       keys=keys,
+                       title='Loss Plot per Depth',
+                       xname="Epoch")})
 
     def _plot_losses_per_depth(self, logs):
         """
