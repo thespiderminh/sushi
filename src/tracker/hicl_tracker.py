@@ -40,8 +40,8 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 _EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti, 'refer': evaluate_refer_kitti}
 _METRICS_FUNC = {'mot17': 'MotChallenge2DBox', 'kitti': 'Kitti2DBox', 'refer': 'ReferKitti2DBox'}
-_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': ReferKITTISceneDataset}
-# _DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': NodeClassifierDataset}
+# _DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': ReferKITTISceneDataset}
+_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': NodeClassifierDataset}
 
 class HICLTracker:
     """
@@ -74,8 +74,11 @@ class HICLTracker:
 
         # Training - Set up the dataset and optimizer
         if self.config.experiment_mode in ('train', 'train-cval'):
-            self.loss_function = FocalLoss(logits=True, gamma=self.config.gamma)
             self.train_dataloader = self._get_train_dataloader()
+            self.loss_function = FocalLoss(logits=True, gamma=self.config.gamma).to(self.config.device)
+            pos_weight = torch.tensor([self.train_dataset.N_neg / self.train_dataset.N_pos], device=self.config.device)
+            self.loss_function_nodes = nn.BCEWithLogitsLoss(pos_weight=pos_weight).to(self.config.device)
+            self.loss_function_nodes_val = nn.BCEWithLogitsLoss().to(self.config.device)
             self.optimizer = self._get_optimizer()
         # Get validation dataset if exists
         if self.val_split:
@@ -112,6 +115,8 @@ class HICLTracker:
         with open(r'configs/mpntrack_cfg.yaml') as file:
             mpntrack_params = yaml.load(file, Loader=yaml.FullLoader)
 
+        wandb.config.update(mpntrack_params)
+
         # Lắp mấy cái trong config vào mpntrack_cfg
         mpntrack_params['graph_model_params']['encoder_feats_dict']['node_in_dim'] = self.config.node_dim
 
@@ -138,8 +143,8 @@ class HICLTracker:
          Set up the dataset and the dataloader
         """
 
-        train_dataset = self._get_dataset(mode='train')
-        train_loader = DataLoader(train_dataset, batch_size=self.config.num_batch, num_workers=self.config.num_workers,
+        self.train_dataset = self._get_dataset(mode='train')
+        train_loader = DataLoader(self.train_dataset, batch_size=self.config.num_batch, num_workers=self.config.num_workers,
                                   shuffle=True,
                                   worker_init_fn=seed_worker, generator=seed_generator(), )
         return train_loader
@@ -281,7 +286,7 @@ class HICLTracker:
 
         return n_components, labels
 
-    def _calculate_loss(self, outputs, edge_labels, edge_mask):
+    def _calculate_loss(self, outputs, curr_batch, edge_mask, curr_depth, mode):
         """
         Calculate MPNTrack loss given edge predictions (outputs) and edge_labels
         """
@@ -289,11 +294,26 @@ class HICLTracker:
         # Compute Weighted BCE:
         loss = torch.as_tensor([.0], device=self.config.device)
         num_steps = len(outputs['classified_edges'])
+        edge_labels = curr_batch.edge_labels
         for step in range(num_steps):
             if self.config.no_fp_loss and torch.any(edge_mask).item():
                 loss += self.loss_function(outputs['classified_edges'][step].view(-1)[edge_mask], edge_labels.view(-1)[edge_mask])
             else:
                 loss += self.loss_function(outputs['classified_edges'][step].view(-1), edge_labels.view(-1))
+        
+        num_steps = len(outputs['classified_nodes'])
+        node_labels = curr_batch.y_node
+        for step in range(num_steps):
+            if curr_depth == 0:
+                if mode == 'val':
+                    loss += self.loss_function_nodes_val(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
+                elif mode == 'train':
+                    loss += self.loss_function_nodes(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
+            else:
+                if mode == 'val':
+                    loss += self.loss_function_nodes_val(curr_batch.node_preds, node_labels.view(-1))
+                elif mode == 'train':
+                    loss += self.loss_function_nodes(curr_batch.node_preds, node_labels.view(-1))
         return loss
 
     def _train_epoch(self):
@@ -346,9 +366,9 @@ class HICLTracker:
                     print("Frozen layers are unlocked! Current active training depth is:", self.active_train_depth)
                     print("*****")
 
-            train_batch.cpu()
-            for i in hicl_graphs:
-                i.cpu()
+            # train_batch.cpu()
+            # for i in hicl_graphs:
+            #     i.cpu()
 
         self.train_epoch += 1
 
@@ -413,6 +433,7 @@ class HICLTracker:
                     # Oracle results
                     # Lấy luôn GT, là cạnh này correct hay incorrect
                     curr_batch.edge_preds = curr_batch.edge_labels
+                    curr_batch.node_preds = curr_batch.y_node
                     logs[curr_depth]["Loss"].append(0.)
                     # Calculate batch classification metrics and loss
                     logs[curr_depth] = self._calculate_true_false_metrics(edge_preds=curr_batch.edge_preds,
@@ -423,25 +444,24 @@ class HICLTracker:
                     outputs, _ = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
                     
                     # Produce decisions
+                    if curr_depth == 0:
+                        curr_batch.node_preds = torch.sigmoid(outputs['classified_nodes'][-1].view(-1).detach())
                     curr_batch.edge_preds = torch.sigmoid(outputs['classified_edges'][-1].view(-1).detach())
 
                     if mode == 'val':
                         # Calculate the batch loss
-                        logs[curr_depth]["Loss"].append(self._calculate_loss(outputs=outputs, edge_labels=curr_batch.edge_labels, edge_mask=curr_batch.edge_mask).item())
+                        logs[curr_depth]["Loss"].append(self._calculate_loss(outputs=outputs, curr_batch=curr_batch, edge_mask=curr_batch.edge_mask, curr_depth=curr_depth, mode=mode).item())
                         # Calculate batch classification metrics and loss
                         logs[curr_depth] = self._calculate_true_false_metrics(edge_preds=curr_batch.edge_preds,
                                                                     edge_labels=curr_batch.edge_labels, logs=logs[curr_depth])
                     elif mode == 'train':
                         # Calculate loss and prepare for a forward pass
-                        loss_curr_depth = self._calculate_loss(outputs=outputs, edge_labels=curr_batch.edge_labels, edge_mask=curr_batch.edge_mask)                          
+                        loss_curr_depth = self._calculate_loss(outputs=outputs, curr_batch=curr_batch, edge_mask=curr_batch.edge_mask, curr_depth=curr_depth, mode=mode)                          
                         loss += loss_curr_depth
                         
                         logs["Loss_per_Depth"][curr_depth].append(loss_curr_depth.detach().item())  # log the curr loss
 
-            # print('-----------')
-            # print("cached_memory = ", torch.cuda.memory_reserved(self.config.device) / (1024**2), " MB")
             graph_data_list = curr_batch.to_data_list()
-            # print("cached_memory = ", torch.cuda.memory_reserved(self.config.device) / (1024**2), " MB")
             if mode != 'train':
                 assert len(graph_data_list) == 1, "Track batch size is greater than 1"
 
@@ -464,6 +484,8 @@ class HICLTracker:
 
                         # Update the hierarchical graphs with new map_from_init and depth
                         hicl_graphs[convert_batch[ix_graph]].update_maps_and_depth(labels)
+                        if curr_depth == 0:
+                            hicl_graphs[convert_batch[ix_graph]].update_node_labels(graph.node_preds)
 
                     else:
                         # Update the hierarchical graphs
@@ -684,6 +706,7 @@ class HICLTracker:
 
                     # Pedestrian ids
                     ped_labels = hicl_graphs[0].get_labels()
+                    node_labels = hicl_graphs[0].node_labels
 
                     # Get graph df
                     graph_df, _ = dataset.get_df_from_seq_and_frames(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, hicl_graphs=hicl_graphs)
@@ -692,7 +715,9 @@ class HICLTracker:
                     # Each Connected Component is a Ped Id. Assign those values to our DataFrame:
                     graph_output_df = graph_df.copy()
                     graph_output_df['ped_id'] = ped_labels
-                    add(tracking_output, [start_frame, end_frame, text], graph_output_df)
+                    graph_output_df['used'] = node_labels
+                    # add(tracking_output, [start_frame, end_frame, text], graph_output_df)
+                    graph_output_df = graph_output_df[graph_output_df['used'] > 0.5]
                     graph_output_df = graph_output_df[self.config.VIDEO_COLUMNS + ['conf', 'detection_id']].copy()
 
                     # Append the new df
@@ -701,10 +726,10 @@ class HICLTracker:
                     else:
                         seq_dfs[text] = [graph_output_df]
 
-                    # Giải phóng GPU
-                    for i in hicl_graphs:
-                        i.cpu()
-                    data.cpu()
+                    # # Giải phóng GPU
+                    # for i in hicl_graphs:
+                    #     i.cpu()
+                    # data.cpu()
 
                 # Merge the dataframes
                 for text, seq_df_list in seq_dfs.items():
@@ -721,12 +746,12 @@ class HICLTracker:
                     tracking_file_path = osp.join(output_path, self.config.mot_sub_folder, seq_name + '-' + text + '.txt')
                     self._save_results(df=seq_output_df, output_file_path=tracking_file_path)
 
-                if not oracle:
-                    # Save the df used for final tracking
-                    folder_path = self.config.tracking_output_path
-                    os.makedirs(folder_path, exist_ok=True)
-                    with open(osp.join(folder_path, f"{seq}.pkl"), 'wb') as f:
-                        pickle.dump(tracking_output, f)
+                # if not oracle:
+                #     # Save the df used for final tracking
+                #     folder_path = self.config.tracking_output_path
+                #     os.makedirs(folder_path, exist_ok=True)
+                #     with open(osp.join(folder_path, f"{seq}.pkl"), 'wb') as f:
+                #         pickle.dump(tracking_output, f)
 
             print("-----")
             print("Tracking completed!")

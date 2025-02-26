@@ -1,9 +1,11 @@
+import math
 import torch
 from torch import nn
 
 from torch_scatter import scatter_mean, scatter_max, scatter_add
 from torch import nn
 from copy import deepcopy
+import CLIP.clip as clip
 
 class MLP(nn.Module):
     def __init__(self, input_dim, fc_dims, dropout_p=0.4, use_batchnorm=False):
@@ -220,6 +222,25 @@ class HiclFeatsEncoder(nn.Module):
 
         return latent_node_feats
 
+class TextEncoder(nn.Module):
+    def __init__(self, vocab_size=49408, embed_dim=128, nhead=8, hidden_dim=128, num_encoder_layers=12, output_dim=64, dropout=0.0):
+        super(TextEncoder, self).__init__()
+        self.embed_dim = embed_dim
+
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=nhead, dim_feedforward=hidden_dim,
+                                                   dropout=dropout, activation='relu')
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        self.linear = nn.Linear(embed_dim, output_dim)
+        
+    def forward(self, src, src_key_padding_mask=None):
+        src = self.embedding(src) * math.sqrt(self.embed_dim)  # (batch_size, seq_length, embed_dim)
+        src = src.permute(1, 0, 2)  # Đổi thành (seq_length, batch_size, embed_dim)
+        memory = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)
+        output = memory.mean(dim=0)  # (batch_size, embed_dim)
+        out = self.linear(output)    # (batch_size, output_dim)
+        return out  # Shape: (batch_size, output_dim)
+    
 
 
 class MOTMPNet(nn.Module):
@@ -260,9 +281,13 @@ class MOTMPNet(nn.Module):
         # print("EXPECTED EDGE INPUT DIM??", encoder_feats_dict['edge_in_dim'])
 
         classifier_feats_dict = model_params['classifier_feats_dict']
+        node_classifier_feats_dict = model_params['node_classifier_feats_dict']
 
         self.encoder = MLPGraphIndependent(**encoder_feats_dict)
         self.classifier = MLPGraphIndependent(**classifier_feats_dict)
+        self.node_classifier = MLPGraphIndependent(**node_classifier_feats_dict)
+
+        self.text_encoder = TextEncoder()
 
         # Define the 'Core' message passing network (i.e. node and edge update models)
         self.MPNet = self._build_core_MPNet(model_params=model_params, encoder_feats_dict=encoder_feats_dict)
@@ -358,6 +383,23 @@ class MOTMPNet(nn.Module):
             classified_edges: list of unnormalized node probabilites after each MP step
         """
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        x_text, x_node_clip = data.x_text, data.x_node_clip
+
+        text = data.text
+        text_features = []
+        text_dict = {}
+        for i in range(len(text)):
+            batch = text[i:i+1]
+            batch_key = batch.tolist()[0]
+            batch_key = ''.join(map(str, batch_key))
+            if batch_key in text_dict:
+                text_features.append(text_dict[batch_key])
+            else:
+                element = self.text_encoder(batch, None)
+                text_dict[batch_key] = element
+                text_features.append(text_dict[batch_key])
+
+        text_features = torch.cat(text_features, dim=0)
 
         x_is_img = len(x.shape) == 4
         if self.node_cnn is not None and x_is_img:
@@ -377,7 +419,6 @@ class MOTMPNet(nn.Module):
             n_nodes = latent_node_feats.shape[0]
             node_embed = node_level_embed.unsqueeze(0).expand(n_nodes, -1)
             latent_node_feats = node_embed
-            print("GOT it here node")
             #print("NODE LEVEL EMBED!!. Layer", ix_layer)
 
         if edge_level_embed is not None:
@@ -400,7 +441,7 @@ class MOTMPNet(nn.Module):
         # During training, the feature vectors that the MPNetwork outputs for the  last self.num_class_steps message
         # passing steps are classified in order to compute the loss.
         first_class_step = self.num_enc_steps - self.num_class_steps + 1
-        outputs_dict = {'classified_edges': []}
+        outputs_dict = {'classified_edges': [], 'classified_nodes': []}
         for step in range(1, self.num_enc_steps + 1):
 
             # Reattach the initially encoded embeddings before the update
@@ -417,9 +458,21 @@ class MOTMPNet(nn.Module):
                 dec_edge_feats, _ = self.classifier(latent_edge_feats)
                 outputs_dict['classified_edges'].append(dec_edge_feats)
 
+                if data.curr_depth == 0:
+                    # _latent_node_feats = latent_node_feats.repeat(1, 2048 // 32)
+                    # _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([_latent_node_feats, x, x_text, x_node_clip], dim=1))
+                    _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([latent_node_feats, text_features], dim=1))
+                    outputs_dict['classified_nodes'].append(dec_node_feats)
+
         if self.num_enc_steps == 0:
             dec_edge_feats, _ = self.classifier(latent_edge_feats)
             outputs_dict['classified_edges'].append(dec_edge_feats)
+
+            if data.curr_depth == 0:
+                # _latent_node_feats = latent_node_feats.repeat(1, 2048 // 32)
+                # _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([_latent_node_feats, x, x_text, x_node_clip], dim=1))
+                _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([latent_node_feats, text_features], dim=1))
+                outputs_dict['classified_nodes'].append(dec_node_feats)
         
         if self.hicl_feats_encoder is not None:
             outputs_dict['node_feats']= self.hicl_feats_encoder.post_mpn_encode_node_feats(latent_node_feats, hicl_feats, initial_node_feats)

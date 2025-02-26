@@ -43,8 +43,10 @@ graph_model_params:
     use_batchnorm: False
 
   node_classifier_feats_dict:
-    node_in_dim: 16
-    node_fc_dims: [8]
+    node_in_dim: 96
+    node_fc_dims: [96, 64, 32, 16, 8]
+    # node_in_dim: 5120
+    # node_fc_dims: [2048, 1024, 512, 256, 128, 64, 32]
     node_out_dim: 1
     dropout_p: 0
     use_batchnorm: False

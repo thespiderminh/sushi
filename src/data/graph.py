@@ -35,7 +35,8 @@ class Graph(Data):
                            'edge_preds', # Predicted approximation to edge labels
                            'reid_emb_dists', # Reid distance for each edge
                            'conf_edge_index',
-                           'edge_mask'] # Conflicting edge indices
+                           'edge_mask', # Conflicting edge indices
+                           'node_preds'] 
 
         for attr_name in _data_attr_names:
             if hasattr(self, attr_name):
@@ -92,6 +93,7 @@ class HierarchicalGraph(Data):
         # Mapping of nodes from prev layers to the deeper
         self.maps = []  # All maps # Chứa tất cả label của các lớp
         self.map_from_init = None  # From initial nodes to the latest layer # Cập nhật label của lớp trước cho lớp sau
+        self.node_labels = None
 
     def _one_hot_encode_frames(self):
         """
@@ -128,6 +130,10 @@ class HierarchicalGraph(Data):
             x_center = (self.x_center, self.x_center)
             x_feet = (self.x_feet, self.x_feet)
             y_id = self.y_id
+            x_text = self.x_text
+            text = self.text
+            x_node_clip = self.x_node_clip
+            y_node = self.y_node
         else:
             # Node and reid features are the average of those from the initial layer
             x_node = scatter_mean(self.x_node, self.map_from_init, dim=0)
@@ -164,8 +170,12 @@ class HierarchicalGraph(Data):
             #         print("Huhu")
             #         print(i)
             #         print(a[i], b[i])
+            x_text = self.x_text
+            text = self.text
+            x_node_clip = self.x_node_clip
+            y_node = self.y_node
 
-        return x_node, x_reid, x_frame, x_frame_mask, x_bbox, x_feet, x_center, y_id
+        return x_node, x_reid, x_frame, x_frame_mask, x_bbox, x_feet, x_center, y_id, x_text, x_node_clip, y_node, text
 
     def _get_track_features(self, config):
         # init x_track and x_track_length
@@ -240,7 +250,7 @@ class HierarchicalGraph(Data):
 
     def construct_curr_graph_nodes(self, config):
         # Get current level features and labels
-        x_node, x_reid, x_frame, x_frame_mask, x_bbox, x_feet, x_center, y_id = self._get_curr_graph_specs(config)
+        x_node, x_reid, x_frame, x_frame_mask, x_bbox, x_feet, x_center, y_id, x_text, x_node_clip, y_node, text = self._get_curr_graph_specs(config)
 
         #if config.zero_nodes:
         if config.zero_nodes:
@@ -277,7 +287,8 @@ class HierarchicalGraph(Data):
                             x_box_start=x_bbox[0], x_box_end=x_bbox[1],
                             x_frame_mask=x_frame_mask, x_feet_start = x_feet[0], x_feet_end=x_feet[1],
                             pruning_score=torch.zeros(raw_edge_index.shape[1], device=x_node.device), # Placeholder needed for correct batching
-                            **motion_features)
+                            **motion_features,
+                            x_text=x_text, x_node_clip=x_node_clip, y_node=y_node, text=text)
 
         return curr_graph
 
@@ -328,11 +339,15 @@ class HierarchicalGraph(Data):
 
         # Placeholder for edge predictions
         edge_preds = torch.zeros((edge_features.shape[0]), dtype=edge_features.dtype)
+        node_preds = torch.zeros((curr_graph.y_node.shape[0]))
 
         # Construct the current layer graph
         curr_graph = Graph(x=curr_graph.x, edge_attr=edge_features, edge_index=edge_ixs, edge_labels=edge_labels,
                                y_id=curr_graph.y_id,
-                           edge_preds=edge_preds, x_reid=x_reid, edge_mask=edge_mask)
+                           x_text=curr_graph.x_text, x_node_clip=curr_graph.x_node_clip, text = curr_graph.text,
+                               y_node=curr_graph.y_node,
+                           edge_preds=edge_preds, x_reid=x_reid, edge_mask=edge_mask,
+                           node_preds=node_preds)
 
         return curr_graph
 
@@ -364,6 +379,9 @@ class HierarchicalGraph(Data):
         self.maps.append([])
         self.curr_depth += 1
 
+    def update_node_labels(self, node_labels):
+        self.node_labels = node_labels
+
     def get_labels(self):
         return self.map_from_init.detach().cpu().numpy()
 
@@ -378,14 +396,15 @@ class HierarchicalGraph(Data):
                             'x_reid',  # ReID features to calculate edge connections
                             'x_node_clip',  # Node features through CLIP model, used for node classifying
                             'x_text',  # text features through CLIP model, used for node classifying
-                            "x_similarity", # similarity between x_node_clip and x_text
+                            'text',
                             'x_frame',  # Frame number of the detection
                             'x_one_hot_frame',  # Frame numbers - one hot encoded
                             'x_bbox',  # Bounding box coordinates of the node (left, top, W, H)
                             'x_center',  # Bonuding box center coordinates of the node
                             'x_feet',  # Further bbox coordinates (feet_x, feet_y)
                             'y_id',  # GT identity of the node
-                            'y',  # GT if the node is suitable for text
+                            'y_node',  # GT if the node is suitable for text
+                            'node_labels',
 
                             # Scene related
                             'fps',  # FPS of the sequence

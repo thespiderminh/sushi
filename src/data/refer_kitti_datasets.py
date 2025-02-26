@@ -8,6 +8,7 @@ from src.data.graph import HierarchicalGraph
 from collections import OrderedDict
 from torch.nn import functional as F
 from torch import nn
+import CLIP.clip as clip
 
 # làm 1 cái dict để lưu cache
 sushi_node_dict = {}
@@ -744,13 +745,14 @@ class NodeClassifierDataset:
                 if y_id[i].item() in valid_ids[str(x_frame[i].item())]:
                     y_node[i] = 1
 
-        x_similarity = x_node_clip.float() @ x_text.float().t()
         x_text = x_text.expand(batch_size, -1)
+        text = clip.tokenize(text)
+        text = text.expand(batch_size, -1)
         
         hierarchical_graph = HierarchicalGraph(x_reid=x_reid.float(), x_node=x_node.float(), x_frame=x_frame.long(),
                                                x_bbox=x_bbox.float(), x_feet=x_feet.float(), x_center=x_center.float(), 
                                                x_text=x_text.float(), x_node_clip=x_node_clip.float(), det_id=det_id,
-                                               x_similarity=x_similarity.float(),
+                                               text=text,
                                                y_id=y_id.long(), fps=fps.long(), frames_total=frames_total.long(),
                                                y_node=y_node.float(),
                                                frames_per_level=frames_per_level.long(), 

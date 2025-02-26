@@ -41,15 +41,16 @@ if __name__ == "__main__":
             'weight_decay': config.mlp_weight_decay,
             "batch_norm": config.mlp_batch_norm,
             "gpu": config.device,
-            "batch_size": 8,
+            "batch_size": config.mlp_num_batch,
         }
         wandb.init(
             # set the wandb project where this run will be logged
-            project="sus_hi",
+            project="sushi",
             name=osp.basename(config.experiment_path),
 
             # track hyperparameters and run metadata
-            config=wconfig
+            # config=wconfig
+            config=config
         )
 
         # Get the splits for the experiment

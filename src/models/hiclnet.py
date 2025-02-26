@@ -65,5 +65,6 @@ class HICLNet(nn.Module):
 
         if self.node_level_embed is not None:
             node_level_embed = self.node_level_embed.weight[ix_layer]
+        data.curr_depth = ix_layer
 
         return self.layers[ix_layer](data, node_level_embed=node_level_embed, edge_level_embed=edge_level_embed)

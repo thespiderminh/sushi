@@ -38,7 +38,7 @@ class NodeClassifier:
 
         # Training - Set up the dataset and optimizer
         self.train_dataset = self._get_dataset(mode='train')
-        self.train_dataloader = DataLoader(self.train_dataset, batch_size=6, num_workers=self.config.num_workers,
+        self.train_dataloader = DataLoader(self.train_dataset, batch_size=self.config.mlp_num_batch, num_workers=self.config.num_workers,
                                 shuffle=True,
                                 worker_init_fn=seed_worker, generator=seed_generator(), )
         self.optimizer = self._get_optimizer(lr=self.config.mlp_lr, weight_decay=self.config.mlp_weight_decay)
