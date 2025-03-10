@@ -11,7 +11,7 @@ from src.models.motion.linear import LinearMotionModel
 from src.utils.deterministic import seed_worker, seed_generator
 from src.data.mot_datasets import MOTSceneDataset
 from src.data.kitti_datasets import KITTISceneDataset
-from src.data.refer_kitti_datasets import ReferKITTISceneDataset, NodeClassifierDataset
+from src.data.refer_kitti_datasets import ReferKITTISceneDataset
 from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 import torch
@@ -40,8 +40,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 _EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti, 'refer': evaluate_refer_kitti}
 _METRICS_FUNC = {'mot17': 'MotChallenge2DBox', 'kitti': 'Kitti2DBox', 'refer': 'ReferKitti2DBox'}
-# _DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': ReferKITTISceneDataset}
-_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': NodeClassifierDataset}
+_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': ReferKITTISceneDataset}
 
 class HICLTracker:
     """
@@ -59,10 +58,6 @@ class HICLTracker:
 
         # Load the model (currently MPNTrack)
         self.model = self._get_model()
-        self.node_classify_model = MLPClassifier(input_dim=self.config.mlp_input_dim,
-                                                 fc_dims=self.config.mlp_fc_dims,
-                                                 dropout_p=self.config.mlp_drop_out,
-                                                 use_batchnorm=self.config.mlp_batch_norm).to(self.config.device)
 
         if self.config.do_motion:
             self.motion_model = LinearMotionModel()
@@ -76,8 +71,10 @@ class HICLTracker:
         if self.config.experiment_mode in ('train', 'train-cval'):
             self.train_dataloader = self._get_train_dataloader()
             self.loss_function = FocalLoss(logits=True, gamma=self.config.gamma).to(self.config.device)
-            pos_weight = torch.tensor([self.train_dataset.N_neg / self.train_dataset.N_pos], device=self.config.device)
-            self.loss_function_nodes = nn.BCEWithLogitsLoss(pos_weight=pos_weight).to(self.config.device)
+            self.loss_function_nodes = FocalLoss(logits=True, alpha=0.9, gamma=self.config.gamma).to(self.config.device)
+            # pos_weight = torch.tensor([self.train_dataset.N_neg / self.train_dataset.N_pos], device=self.config.device)
+            # self.loss_function_nodes = nn.BCEWithLogitsLoss(pos_weight=pos_weight).to(self.config.device)
+            # # self.loss_function_nodes = NTXentLoss(temperature=0.1).to(self.config.device)
             self.loss_function_nodes_val = nn.BCEWithLogitsLoss().to(self.config.device)
             self.optimizer = self._get_optimizer()
         # Get validation dataset if exists
@@ -309,11 +306,6 @@ class HICLTracker:
                     loss += self.loss_function_nodes_val(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
                 elif mode == 'train':
                     loss += self.loss_function_nodes(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
-            else:
-                if mode == 'val':
-                    loss += self.loss_function_nodes_val(curr_batch.node_preds, node_labels.view(-1))
-                elif mode == 'train':
-                    loss += self.loss_function_nodes(curr_batch.node_preds, node_labels.view(-1))
         return loss
 
     def _train_epoch(self):
@@ -441,8 +433,7 @@ class HICLTracker:
                                                                 logs=logs[curr_depth])
                 else:
                     # Graph based forward pass
-                    outputs, _ = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
-                    
+                    outputs = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
                     # Produce decisions
                     if curr_depth == 0:
                         curr_batch.node_preds = torch.sigmoid(outputs['classified_nodes'][-1].view(-1).detach())
@@ -642,7 +633,7 @@ class HICLTracker:
                                             tracker_sub_folder=self.config.mot_sub_folder, output_sub_folder=self.config.mot_sub_folder,
                                             text=self.val_dataset.text_dicts)[0]
                 self._log_tb_mot_metrics_on_wandb(mot_metrics)
-                self._log_tb_mot_metrics(mot_metrics) 
+                # self._log_tb_mot_metrics(mot_metrics) 
 
                 self._save_highest_hota_model(mot_metrics)
 
@@ -716,6 +707,7 @@ class HICLTracker:
                     graph_output_df = graph_df.copy()
                     graph_output_df['ped_id'] = ped_labels
                     graph_output_df['used'] = node_labels
+                    print(graph_output_df['used'])
                     # add(tracking_output, [start_frame, end_frame, text], graph_output_df)
                     graph_output_df = graph_output_df[graph_output_df['used'] > 0.5]
                     graph_output_df = graph_output_df[self.config.VIDEO_COLUMNS + ['conf', 'detection_id']].copy()
@@ -785,129 +777,6 @@ class HICLTracker:
         self.model.train()
 
         return logs_total, logs_all
-
-    def track_with_mlp(self, dataset, output_path, mode='val', mlp_path=None):
-        """
-        Main tracking method. Given a dataset, track every sequence in it and create output files.
-        Track mỗi video được đưa vào qua dataset, và đẩy output ra
-        """
-
-        if mlp_path is not None:
-            self.node_classify_model.load_state_dict(torch.load(mlp_path, map_location=self.config.device))
-
-        # Set the model in the test mode
-        self.model.eval()
-        self.node_classify_model.eval()
-        assert not self.model.training, "Test error: Model is not in evaluation mode"
-
-        # Disable gradients
-        with torch.no_grad():
-
-            # Separate dictionary to bookkeep the logs for each depth network
-            # Chuẩn bị các metrics để in ra
-            logs_all = [{"Loss": [], "TP": [], "FP": [], "TN": [], "FN": [], "CSR": []} for i in range(self.config.hicl_depth)]
-
-            # Loop over sequences
-            for seq, seq_with_frames_and_text in dataset.sparse_frames_per_seq.items():
-                print("Tracking", seq, "with node classifier")
-                # Loop over each datapoint - Equivalent to using a dataloader with batch 1
-                seq_dfs = {}
-                folder_path = self.config.tracking_output_path
-                with open(osp.join(folder_path, f"{seq}.pkl"), 'rb') as file:
-                    tracking_output = pickle.load(file)
-                for seq_name, start_frame, end_frame, text in seq_with_frames_and_text:
-                    # Equivalent to train_batch with a single datapoint
-                    # Tạo 1 cái graph cho 1 lần train 512 frames,
-                    # data là cái HierarchicalGraph chứa embedding ngoại hình của các detection, số frame, bounding box của chúng
-                    data = dataset.get_graph_from_seq_and_frames_and_text(seq_name=seq_name, start_frame=start_frame, end_frame=end_frame, text=text)
-                    data.to(self.config.device)
-
-                    # Small trick to utilize torch-geometric built in functions
-                    track_batch = Batch.from_data_list([data])
-                    hicl_graphs = track_batch.to_data_list()
-
-                    outputs = self._track_MLP(graphs=hicl_graphs)
-                    graph_output_df = tracking_output[start_frame][end_frame][text]
-
-                    graph_output_df['used'] = outputs
-                    graph_output_df = graph_output_df[graph_output_df['used'] == 1]
-                    graph_output_df = graph_output_df[self.config.VIDEO_COLUMNS + ['conf', 'detection_id']].copy()
-
-                    # Append the new df
-                    if text in seq_dfs:
-                        seq_dfs[text].append(graph_output_df)
-                    else:
-                        seq_dfs[text] = [graph_output_df]
-
-                    # Giải phóng GPU
-                    for i in hicl_graphs:
-                        i.cpu()
-                    data.cpu()
-
-                # Merge the dataframes
-                for text, seq_df_list in seq_dfs.items():
-                    seq_merged_df = self._merge_subseq_dfs(seq_df_list)
-
-                    # Postprocess the dataframes - drop short trajectories
-                    postprocess = Postprocessor(seq_merged_df.copy(),
-                                                seq_info_dict=dataset.seq_info_dicts[seq_name],
-                                                config=self.config)
-                    seq_output_df = postprocess.postprocess_trajectories()
-
-                    # Save the output
-                    os.makedirs(output_path, exist_ok=True)
-                    tracking_file_path = osp.join(output_path, seq_name + '-' + text + '.txt')
-                    self._save_results(df=seq_output_df, output_file_path=tracking_file_path)
-
-            print("-----")
-            print("Tracking completed!")
-
-            # Print metrics
-            logs_total = {}
-        #     if mode != 'test':
-        #         for i in range(self.config.hicl_depth):
-        #             # Calculate accuracy, precision, recall
-        #             logs = logs_all[i]
-        #             if logs["Loss"]:
-        #                 print("Depth", i+1, "- Metrics:")
-        #                 logs = self._postprocess_logs(logs=logs)
-
-        #         # Total logs - Cumulative of every layer
-        #         print("TOTAL - Metrics:")
-        #         logs_total = {"Loss": [logs_all[i]["Loss"] for i in range(self.config.hicl_depth)],
-        #                       "TP": [logs_all[i]["TP"] for i in range(self.config.hicl_depth)],
-        #                       "FP": [logs_all[i]["FP"] for i in range(self.config.hicl_depth)],
-        #                       "TN": [logs_all[i]["TN"] for i in range(self.config.hicl_depth)],
-        #                       "FN": [logs_all[i]["FN"] for i in range(self.config.hicl_depth)],
-        #                       "CSR": [logs_all[i]["CSR"] for i in range(self.config.hicl_depth)]}
-        #         logs_total["Loss"] = [sum(logs_total["Loss"])]  # To be compatible with train loss (sum of hicl layers)
-        #         logs_total = self._postprocess_logs(logs_total)
-
-        #         print("-----")
-
-
-
-        # # Set the model back in training mode
-        # self.model.train()
-
-        return logs_total, logs_all
-    
-    def _track_MLP(self, graphs):
-        hicl_graphs = graphs.copy()
-        curr_batch, unfit_batch, convert_batch, _ = self._hicl_to_curr(hicl_graphs=hicl_graphs)
-        _, x_node_secondary = self.model(curr_batch, 0)
-        curr_batch.cpu()
-
-        batch = Batch.from_data_list([hicl_graph for hicl_graph in hicl_graphs])
-
-        # Tính output
-        outputs = self.node_classify_model(batch, x_node_secondary)
-        sigmoid = nn.Sigmoid()
-        outputs = sigmoid(outputs)
-        outputs = (outputs.view(-1) > 0.5).float().tolist()
-
-        return outputs
-
 
     def _merge_subseq_dfs(self, subseq_dfs):
         """
@@ -1152,3 +1021,46 @@ class FocalLoss(nn.Module):
             return torch.mean(F_loss)
         else:
             return F_loss
+        
+
+class NTXentLoss(nn.Module):
+    """
+    Compute the NT-Xent loss for text and node embeddings with multiple positive pairs.
+
+    Args:
+        text_embeddings (torch.Tensor): Embeddings of 1 text, shape (num_nodes, embedding_dim).
+        node_embeddings (torch.Tensor): Embeddings of the nodes, shape (num_nodes, embedding_dim).
+        positive_pairs (list): List of boolean indicating positive pairs.
+        temperature (float): Temperature parameter for scaling the logits.
+
+    Returns:
+        torch.Tensor: The computed NT-Xent loss.
+    """
+    def __init__(self, temperature=0.5):
+        super(NTXentLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, text_embeddings, node_embeddings, positive_pairs):        
+        # Compute the similarity matrix between text and node embeddings
+        sim_matrix = F.cosine_similarity(text_embeddings, node_embeddings, dim=1)
+        sim_matrix = sim_matrix / self.temperature  # Scale by temperature
+        
+        # Create a mask for positive pairs
+        positive_mask = positive_pairs.bool()
+        
+        # Compute the logits for positive pairs
+        positive_logits = sim_matrix[positive_mask]
+        
+        # Compute the logits for negative pairs
+        negative_logits = sim_matrix[~positive_mask]
+        
+        # Compute the numerator (sum of exp for positive pairs)
+        numerator = torch.exp(positive_logits).sum()
+        
+        # Compute the denominator (sum of exp for all pairs)
+        denominator = torch.exp(sim_matrix).sum()
+        
+        # Compute the NT-Xent loss
+        loss = -torch.log(numerator / denominator)
+        
+        return loss

@@ -4,7 +4,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from configs import mot17_config, kitti_config, refer_kitti_config
 from src.utils.deterministic import make_deterministic
 from src.tracker.hicl_tracker import HICLTracker
-from src.tracker.node_classfier import NodeClassifier
 from src.data.splits import get_seqs_from_splits
 import os.path as osp
 from TrackEval.scripts.run_mot_challenge import evaluate_mot17
@@ -33,23 +32,12 @@ if __name__ == "__main__":
     if config.experiment_mode == 'train':
         # WANDB
         wandb.login(key='510212463700ec0ca7fbca1d123da47705710f0c')
-        wconfig={
-            "input_dim": config.mlp_input_dim,
-            "hidden_mlp_size": config.mlp_fc_dims,
-            "drop_out": config.mlp_drop_out,
-            "lr": config.mlp_lr,
-            'weight_decay': config.mlp_weight_decay,
-            "batch_norm": config.mlp_batch_norm,
-            "gpu": config.device,
-            "batch_size": config.mlp_num_batch,
-        }
         wandb.init(
             # set the wandb project where this run will be logged
             project="sushi",
             name=osp.basename(config.experiment_path),
 
             # track hyperparameters and run metadata
-            # config=wconfig
             config=config
         )
 
@@ -58,30 +46,11 @@ if __name__ == "__main__":
         # Initialize the tracker
 
         # Train the tracker
-        if config.sushi_mode == 'train':
-            hicl_tracker = HICLTracker(config=config, seqs=seqs, splits=splits)
-            # if config.load_train_ckpt:
-            #     print("Loading checkpoint from ", config.hicl_model_path)
-            #     hicl_tracker.model = hicl_tracker.load_pretrained_model()
-            hicl_tracker.train()
-
-            print("##############")
-            print("Finish training SUSHI, start training MLP...")
-            print("##############")
-
-        # TODO Train Node classifier
-        if config.node_clasifier_mode == 'train':
-            node_classifier = NodeClassifier(config=config, seqs=seqs, splits=splits)
-            node_classifier.train()
-
-        # # Track again
-        # if config.sushi_mode == 'pre-train':
-        #     hicl_tracker = HICLTracker(config=config, seqs=seqs, splits=splits)
-        # output_path = osp.join(config.experiment_path, "Tracking_files")
-        # hicl_tracker.track_with_mlp(dataset=hicl_tracker.val_dataset, output_path=output_path)
-        # eval_func(tracker_path=output_path,
-        #             split=hicl_tracker.val_split, data_path=config.data_path, tracker_sub_folder=config.mot_sub_folder,
-        #             output_sub_folder=config.mot_sub_folder,text=hicl_tracker.val_dataset.text_dicts)
+        hicl_tracker = HICLTracker(config=config, seqs=seqs, splits=splits)
+        # if config.load_train_ckpt:
+        #     print("Loading checkpoint from ", config.hicl_model_path)
+        #     hicl_tracker.model = hicl_tracker.load_pretrained_model()
+        hicl_tracker.train()
 
     # TESTING
     elif config.experiment_mode == 'test':

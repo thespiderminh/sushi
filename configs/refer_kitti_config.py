@@ -46,16 +46,11 @@ def get_arguments(args=None):
 
     # EXPERIMENT
     parser.add_argument('--experiment_mode', help='train/test/train-cval/eval', type=str, required=True)  # What kind of an experiment will be conducted
-    parser.add_argument('--sushi_mode', help='train/pre-train', type=str)  # What kind of an experiment will be conducted with node_classifier
-    parser.add_argument('--node_clasifier_mode', help='train/pre-train', type=str)  # What kind of an experiment will be conducted with node_classifier
     parser.add_argument('--run_id', help='identifier string for current experiment', type=str, default=None)
     parser.add_argument('--connectivity', help='chunk or full', type=str, default='chunk')
 
     # PATHS
-    parser.add_argument('--tracking_output_path', help='Where is ".pkl" files - tracking files of pretrained sushi located?', type=str,
-                        default='/data/hpc/ngocminh/SUSHI/output/tracking_files')
     parser.add_argument('--sushi_model_folder', type=str, default='/data/hpc/ngocminh/SUSHI/output/sushi_model')
-    parser.add_argument('--mlp_model_folder', type=str, default='/data/hpc/ngocminh/SUSHI/output/node_classifier_model')
     parser.add_argument('--data_path', help='Where is data located?', type=str,
                         default='/data/hpc/ngocminh/SUSHI/datasets')
     parser.add_argument('--output_path', help='Where is the output folder?', type=str,
@@ -86,8 +81,6 @@ def get_arguments(args=None):
     parser.add_argument('--feature_embedding_model_path', help='Reid model path to obtain features', type=str,
                         default='')
     parser.add_argument('--hicl_model_path', help='HICL model path to perform tracking', type=str,
-                        default='')
-    parser.add_argument('--mlp_model_file', help="For testing", type=str,
                         default='')
     
     parser.add_argument('--load_train_ckpt', action='store_true', default=False)
@@ -123,13 +116,13 @@ def get_arguments(args=None):
 
     # TRAINING
     parser.add_argument('--num_epoch', help='Number of epochs for training', type=int, default=20)
-    parser.add_argument('--num_batch', help='Number of graphs per mot_sub_folder', type=int, default=10)
+    parser.add_argument('--num_batch', help='Number of graphs per mot_sub_folder', type=int, default=4)
     parser.add_argument('--lr', help='Learning rate', type=float, default=0.001)  # MPNTrack param
-    parser.add_argument('--gamma', help='Focal loss gamma parameter', type=float, default=1)
+    parser.add_argument('--gamma', help='Focal loss gamma parameter', type=float, default=3)
     parser.add_argument('--weight_decay', help='Weight decay', type=float, default=0.0001)  # MPNTrack param
     parser.add_argument('--augmentation', help='Perform data augmentation during training', dest='augmentation', action='store_true')
     parser.add_argument('--train_dataset_frame_overlap', help='Most frames to overlap for different datapoints', type=int, default=20)
-    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=8) # Don't start evaluating bf all layers are unfrozen!
+    parser.add_argument('--start_eval', help='Epoch at which evaluation will start', type=int, default=3) # Don't start evaluating bf all layers are unfrozen!
     parser.add_argument('--no_fp_loss', help='Do not compute a loss for FPs', dest='no_fp_loss', action='store_true', default=False) 
 
 
@@ -161,8 +154,8 @@ def get_arguments(args=None):
     parser.add_argument('--hicl_depth', help='The depth of the hierarchical architecture', type=int, default=9)
     parser.add_argument('--node_id_min_ratio', help='Min percentage of the most common id for hicl layers gt assignment', type=float, default=0.5)
     parser.add_argument('--depth_pretrain_iteration', help='Number of iterations before unlocking next level', type=int,
-                        default=1200)
-                        # default=5000)
+                        default=1121)
+                        # default=24)
 
     # MOTION SETTING
     parser.add_argument('--motion_max_length', type=int, nargs='*', help='Maximum number of frames used to encode trajectories before pred at each layer', default=[2, 4, 8, 16, 32, 64, 128, 256])
@@ -186,23 +179,10 @@ def get_arguments(args=None):
     parser.add_argument('--mpn_use_pos_edge', type=_store_bool, nargs='*', default=[True]*9)
 
     # VERBOSE
-    parser.set_defaults(verbose_iteration=100)
+    parser.set_defaults(verbose_iteration=200)
 
     # EXPERIMENT EVAL
     parser.add_argument('--old_experiments', type=str, nargs='*', help='Experiment files to merge', default=[None])
-
-    # MLP
-    parser.add_argument('--num_epoch_mlp', help='Number of epochs for training node clasifier', type=int, default=50)
-    parser.add_argument('--mlp_num_batch', help='Number of graphs per mot_sub_folder', type=int, default=6)
-    parser.add_argument('--mlp_input_dim', help='Input dimension of MLP', type=int, default=96)
-    parser.add_argument('--mlp_fc_dims', help="Dimension of MLP's Linear layer", type=int, nargs='*', default=[96, 96, 96, 96, 96, 96, 96, 96, 96, 64, 64, 32, 32, 16, 16, 16])
-    # parser.add_argument('--mlp_input_dim', help='Input dimension of MLP', type=int, default=5120)
-    # parser.add_argument('--mlp_fc_dims', help="Dimension of MLP's Linear layer", type=int, nargs='*', default=[4096, 4096, 2048, 2048, 1024, 1024, 512, 512, 256, 256, 128, 128, 64, 64, 32, 32, 16, 16, 8, 8])
-    parser.add_argument('--mlp_drop_out', help='Drop out rate', type=float, default=0.0)
-    parser.add_argument('--mlp_lr', type=float, default=0.003)
-    parser.add_argument('--mlp_weight_decay', type=float, default=0)
-    parser.add_argument('--mlp_batch_norm', type=_store_bool, default=True)
-    parser.add_argument('--mlp_verbose', type=int, default=400)
 
     # Postprocess
     if args is not None:

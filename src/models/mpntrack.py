@@ -220,27 +220,7 @@ class HiclFeatsEncoder(nn.Module):
             latent_node_feats = self.merge_skip_conn(latent_node_feats)
             #latent_node_feats = latent_node_feats + initial_hicl_feats
 
-        return latent_node_feats
-
-class TextEncoder(nn.Module):
-    def __init__(self, vocab_size=49408, embed_dim=128, nhead=8, hidden_dim=128, num_encoder_layers=12, output_dim=64, dropout=0.0):
-        super(TextEncoder, self).__init__()
-        self.embed_dim = embed_dim
-
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=nhead, dim_feedforward=hidden_dim,
-                                                   dropout=dropout, activation='relu')
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
-        self.linear = nn.Linear(embed_dim, output_dim)
-        
-    def forward(self, src, src_key_padding_mask=None):
-        src = self.embedding(src) * math.sqrt(self.embed_dim)  # (batch_size, seq_length, embed_dim)
-        src = src.permute(1, 0, 2)  # Đổi thành (seq_length, batch_size, embed_dim)
-        memory = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)
-        output = memory.mean(dim=0)  # (batch_size, embed_dim)
-        out = self.linear(output)    # (batch_size, output_dim)
-        return out  # Shape: (batch_size, output_dim)
-    
+        return latent_node_feats    
 
 
 class MOTMPNet(nn.Module):
@@ -287,7 +267,16 @@ class MOTMPNet(nn.Module):
         self.classifier = MLPGraphIndependent(**classifier_feats_dict)
         self.node_classifier = MLPGraphIndependent(**node_classifier_feats_dict)
 
-        self.text_encoder = TextEncoder()
+        self.x_compressor = nn.Linear(in_features=2048, out_features=512)
+        self.text_fuser = nn.Sequential(
+            nn.Linear(in_features=2560, out_features=1024),
+            nn.ReLU(),
+            nn.Linear(in_features=1024, out_features=512),
+            nn.ReLU(),
+            nn.Linear(in_features=512, out_features=512)
+        )
+        # self.text_fuser = nn.Linear(in_features=2560, out_features=512)
+        self.cross_attention = nn.MultiheadAttention(embed_dim=512, num_heads=32)
 
         # Define the 'Core' message passing network (i.e. node and edge update models)
         self.MPNet = self._build_core_MPNet(model_params=model_params, encoder_feats_dict=encoder_feats_dict)
@@ -385,21 +374,9 @@ class MOTMPNet(nn.Module):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         x_text, x_node_clip = data.x_text, data.x_node_clip
 
-        text = data.text
-        text_features = []
-        text_dict = {}
-        for i in range(len(text)):
-            batch = text[i:i+1]
-            batch_key = batch.tolist()[0]
-            batch_key = ''.join(map(str, batch_key))
-            if batch_key in text_dict:
-                text_features.append(text_dict[batch_key])
-            else:
-                element = self.text_encoder(batch, None)
-                text_dict[batch_key] = element
-                text_features.append(text_dict[batch_key])
-
-        text_features = torch.cat(text_features, dim=0)
+        if data.curr_depth == 0:
+            att_x = self.x_compressor(x)
+            fused_x_text = self.text_fuser(torch.cat((x, x_text), dim=1))
 
         x_is_img = len(x.shape) == 4
         if self.node_cnn is not None and x_is_img:
@@ -441,7 +418,7 @@ class MOTMPNet(nn.Module):
         # During training, the feature vectors that the MPNetwork outputs for the  last self.num_class_steps message
         # passing steps are classified in order to compute the loss.
         first_class_step = self.num_enc_steps - self.num_class_steps + 1
-        outputs_dict = {'classified_edges': [], 'classified_nodes': []}
+        outputs_dict = {'classified_edges': [], 'classified_nodes': [],}
         for step in range(1, self.num_enc_steps + 1):
 
             # Reattach the initially encoded embeddings before the update
@@ -457,24 +434,28 @@ class MOTMPNet(nn.Module):
                 # Classification Step
                 dec_edge_feats, _ = self.classifier(latent_edge_feats)
                 outputs_dict['classified_edges'].append(dec_edge_feats)
-
-                if data.curr_depth == 0:
-                    # _latent_node_feats = latent_node_feats.repeat(1, 2048 // 32)
-                    # _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([_latent_node_feats, x, x_text, x_node_clip], dim=1))
-                    _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([latent_node_feats, text_features], dim=1))
-                    outputs_dict['classified_nodes'].append(dec_node_feats)
+        
+        if data.curr_depth == 0:
+            # print('---------')
+            # print("att_x = \n", att_x, att_x.shape)
+            # print("fused_x_text = \n", fused_x_text, fused_x_text.shape)
+            attn_output, _ = self.cross_attention(
+                query=att_x.unsqueeze(1).transpose(0, 1),  # Query: node embeddings
+                key=fused_x_text.unsqueeze(1).transpose(0, 1),    # Key: text embeddings
+                value=fused_x_text.unsqueeze(1).transpose(0, 1)   # Value: text embeddings
+            )
+            # print("attn_output = \n", attn_output, attn_output.shape)
+            attn_output = attn_output.transpose(0, 1)
+            attn_output = attn_output.squeeze(1)
+            _, dec_node_feats = self.node_classifier(nodes_feats=attn_output)
+            # print("dec_node_feats = \n", dec_node_feats.view(-1), dec_node_feats.shape)
+            outputs_dict['classified_nodes'].append(dec_node_feats)
 
         if self.num_enc_steps == 0:
             dec_edge_feats, _ = self.classifier(latent_edge_feats)
             outputs_dict['classified_edges'].append(dec_edge_feats)
-
-            if data.curr_depth == 0:
-                # _latent_node_feats = latent_node_feats.repeat(1, 2048 // 32)
-                # _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([_latent_node_feats, x, x_text, x_node_clip], dim=1))
-                _, dec_node_feats = self.node_classifier(nodes_feats=torch.cat([latent_node_feats, text_features], dim=1))
-                outputs_dict['classified_nodes'].append(dec_node_feats)
         
         if self.hicl_feats_encoder is not None:
-            outputs_dict['node_feats']= self.hicl_feats_encoder.post_mpn_encode_node_feats(latent_node_feats, hicl_feats, initial_node_feats)
+            outputs_dict['node_feats'] = self.hicl_feats_encoder.post_mpn_encode_node_feats(latent_node_feats, hicl_feats, initial_node_feats)
 
-        return outputs_dict, latent_node_feats
+        return outputs_dict

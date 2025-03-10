@@ -7,7 +7,7 @@ graph_model_params:
   do_hicl_feats: False
 
   hicl_feats_encoder:
-    ignore_mpn_out: True # If true, you ignore the MPN output, you return as 'hierarchical features' the input ones
+    ignore_mpn_out: False # If true, you ignore the MPN output, you return as 'hierarchical features' the input ones
     detach_hicl_grad: False
     merge_method: 'cat'
     skip_conn: False # If true, a skip connection across MPN output is used. If False, only the MPN output is returned
@@ -43,10 +43,8 @@ graph_model_params:
     use_batchnorm: False
 
   node_classifier_feats_dict:
-    node_in_dim: 96
-    node_fc_dims: [96, 64, 32, 16, 8]
-    # node_in_dim: 5120
-    # node_fc_dims: [2048, 1024, 512, 256, 128, 64, 32]
+    node_in_dim: 512
+    node_fc_dims: [128, 32, 8]
     node_out_dim: 1
     dropout_p: 0
     use_batchnorm: False
