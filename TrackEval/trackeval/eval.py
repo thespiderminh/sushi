@@ -24,7 +24,7 @@ class Evaluator:
             'LOG_ON_ERROR': os.path.join(code_path, 'error_log.txt'),  # if not None, save any errors into a log file.
 
             'PRINT_RESULTS': True,
-            'PRINT_ONLY_COMBINED': False,
+            'PRINT_ONLY_COMBINED': True,
             'PRINT_CONFIG': True,
             'TIME_PROGRESS': True,
             'DISPLAY_LESS_PROGRESS': True,

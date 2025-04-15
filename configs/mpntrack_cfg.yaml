@@ -18,8 +18,15 @@ graph_model_params:
     edge_fc_dims: [18, 18]
     edge_out_dim: 16
     node_in_dim: 2048
-    #node_fc_dims: [512, 128]
-    node_fc_dims: [128]
+    node_fc_dims: [512, 128]
+    # node_fc_dims: [128]
+    node_out_dim: 32
+    dropout_p: 0
+    use_batchnorm: False
+
+  text_encoder_feats_dict:
+    node_in_dim: 512
+    node_fc_dims: [128,]
     node_out_dim: 32
     dropout_p: 0
     use_batchnorm: False
@@ -43,11 +50,11 @@ graph_model_params:
     use_batchnorm: False
 
   node_classifier_feats_dict:
-    node_in_dim: 512
-    node_fc_dims: [128, 32, 8]
+    node_in_dim: 32
+    node_fc_dims: [16, 8, 4]
     node_out_dim: 1
-    dropout_p: 0
-    use_batchnorm: False
+    dropout_p: 0.2
+    use_batchnorm: True
 
   cnn_params:
     arch: resnet50

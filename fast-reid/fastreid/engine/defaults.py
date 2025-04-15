@@ -87,25 +87,25 @@ def default_setup(cfg, args):
     # setup_logger(output_dir, distributed_rank=rank, name="fvcore")
     logger = setup_logger(output_dir, distributed_rank=rank)
 
-    logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
-    logger.info("Environment info:\n" + collect_env_info())
+    # logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
+    # logger.info("Environment info:\n" + collect_env_info())
 
-    logger.info("Command line arguments: " + str(args))
-    if hasattr(args, "config_file") and args.config_file != "":
-        logger.info(
-            "Contents of args.config_file={}:\n{}".format(
-                args.config_file, PathManager.open(args.config_file, "r").read()
-            )
-        )
+    # logger.info("Command line arguments: " + str(args))
+    # if hasattr(args, "config_file") and args.config_file != "":
+    #     logger.info(
+    #         "Contents of args.config_file={}:\n{}".format(
+    #             args.config_file, PathManager.open(args.config_file, "r").read()
+    #         )
+    #     )
 
-    logger.info("Running with full config:\n{}".format(cfg))
+    # logger.info("Running with full config:\n{}".format(cfg))
     if comm.is_main_process() and output_dir:
         # Note: some of our scripts may expect the existence of
         # config.yaml in output directory
         path = os.path.join(output_dir, "config.yaml")
         with PathManager.open(path, "w") as f:
             f.write(cfg.dump())
-        logger.info("Full config saved to {}".format(os.path.abspath(path)))
+        # logger.info("Full config saved to {}".format(os.path.abspath(path)))
 
     # make sure each worker has a different, yet deterministic seed if specified
     seed_all_rng()

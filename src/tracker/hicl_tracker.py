@@ -12,6 +12,7 @@ from src.utils.deterministic import seed_worker, seed_generator
 from src.data.mot_datasets import MOTSceneDataset
 from src.data.kitti_datasets import KITTISceneDataset
 from src.data.refer_kitti_datasets import ReferKITTISceneDataset
+from src.data.refer_dance_datasets import ReferDanceSceneDataset
 from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 import torch
@@ -32,29 +33,32 @@ import os
 from TrackEval.scripts.run_mot_challenge import evaluate_mot17
 from TrackEval.scripts.run_kitti import evaluate_kitti
 from TrackEval.scripts.run_refer_kitti import evaluate_refer_kitti
+from TrackEval.scripts.run_refer_dance import evaluate_refer_dance
 import matplotlib.pyplot as plt
 from torch import nn
 import math
 import pickle
 from torch.utils.tensorboard.writer import SummaryWriter
 
-_EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti, 'refer': evaluate_refer_kitti}
-_METRICS_FUNC = {'mot17': 'MotChallenge2DBox', 'kitti': 'Kitti2DBox', 'refer': 'ReferKitti2DBox'}
-_DATASET_FUNC = {'mot17': MOTSceneDataset, 'kitti': KITTISceneDataset, 'refer': ReferKITTISceneDataset}
+_RUN_IDS = {'mot17': (evaluate_mot17, 'MotChallenge2DBox', MOTSceneDataset),
+            'kitti': (evaluate_kitti, 'Kitti2DBox', KITTISceneDataset),
+            'refer_kitti': (evaluate_refer_kitti, 'ReferKitti2DBox', ReferKITTISceneDataset),
+            'refer_dance': (evaluate_refer_dance, 'ReferDance2DBox', ReferDanceSceneDataset),
+            }
 
 class HICLTracker:
     """
     Hierarchical processor of the sequences. Consists of a trainable model and hierarchical processing scripts
     """
-    def __init__(self, config, seqs, splits):
+    def __init__(self, config, seqs, splits, run_id):
         self.config = config
         self.seqs = seqs
         self.train_split, self.val_split, self.test_split = splits
 
         # Load function for each dataset
-        self.eval_func = _EVAL_FUNC[self.config.run_id[:5]]
-        self.metrics_func = _METRICS_FUNC[self.config.run_id[:5]]
-        self.dataset_func = _DATASET_FUNC[self.config.run_id[:5]]
+        for i in _RUN_IDS:
+            if run_id.startswith(i):
+                self.eval_func, self.metrics_func, self.dataset_func = _RUN_IDS[i]
 
         # Load the model (currently MPNTrack)
         self.model = self._get_model()
@@ -71,11 +75,12 @@ class HICLTracker:
         if self.config.experiment_mode in ('train', 'train-cval'):
             self.train_dataloader = self._get_train_dataloader()
             self.loss_function = FocalLoss(logits=True, gamma=self.config.gamma).to(self.config.device)
-            self.loss_function_nodes = FocalLoss(logits=True, alpha=0.9, gamma=self.config.gamma).to(self.config.device)
-            # pos_weight = torch.tensor([self.train_dataset.N_neg / self.train_dataset.N_pos], device=self.config.device)
+
+            pos_weight = torch.tensor([self.train_dataset.N_neg / self.train_dataset.N_pos], device=self.config.device)
+            self.loss_function_nodes = ContrastiveLoss(pos_weight=pos_weight)
+            self.loss_function_nodes_val = ContrastiveLoss()
             # self.loss_function_nodes = nn.BCEWithLogitsLoss(pos_weight=pos_weight).to(self.config.device)
-            # # self.loss_function_nodes = NTXentLoss(temperature=0.1).to(self.config.device)
-            self.loss_function_nodes_val = nn.BCEWithLogitsLoss().to(self.config.device)
+            # self.loss_function_nodes_val = nn.BCEWithLogitsLoss().to(self.config.device)
             self.optimizer = self._get_optimizer()
         # Get validation dataset if exists
         if self.val_split:
@@ -298,14 +303,23 @@ class HICLTracker:
             else:
                 loss += self.loss_function(outputs['classified_edges'][step].view(-1), edge_labels.view(-1))
         
-        num_steps = len(outputs['classified_nodes'])
+        # num_steps = len(outputs['classified_nodes'])
+        # node_labels = curr_batch.y_node
+        # for step in range(num_steps):
+        #     if curr_depth == 0:
+        #         if mode == 'val':
+        #             loss += self.loss_function_nodes_val(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
+        #         elif mode == 'train':
+        #             loss += self.loss_function_nodes(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
+
+        num_steps = len(outputs['node_feats'])
         node_labels = curr_batch.y_node
         for step in range(num_steps):
             if curr_depth == 0:
                 if mode == 'val':
-                    loss += self.loss_function_nodes_val(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
+                    loss += self.loss_function_nodes_val(outputs['x_text'], outputs['node_feats'][step], node_labels.view(-1))
                 elif mode == 'train':
-                    loss += self.loss_function_nodes(outputs['classified_nodes'][step].view(-1), node_labels.view(-1))
+                    loss += self.loss_function_nodes(outputs['x_text'], outputs['node_feats'][step], node_labels.view(-1))
         return loss
 
     def _train_epoch(self):
@@ -357,10 +371,6 @@ class HICLTracker:
                     print("*****")
                     print("Frozen layers are unlocked! Current active training depth is:", self.active_train_depth)
                     print("*****")
-
-            # train_batch.cpu()
-            # for i in hicl_graphs:
-            #     i.cpu()
 
         self.train_epoch += 1
 
@@ -433,10 +443,14 @@ class HICLTracker:
                                                                 logs=logs[curr_depth])
                 else:
                     # Graph based forward pass
+                    # print('----------')
                     outputs = self.model(curr_batch, curr_depth)  # Forward pass for this specific depth
                     # Produce decisions
                     if curr_depth == 0:
-                        curr_batch.node_preds = torch.sigmoid(outputs['classified_nodes'][-1].view(-1).detach())
+                        similarity = F.cosine_similarity(outputs['node_feats'][-1].detach(), outputs['x_text'].detach())
+                        curr_batch.node_preds = similarity
+                        # print("curr_batch.node_preds = ", curr_batch.node_preds)
+                        # print("curr_batch.y_node = ", curr_batch.y_node.view(-1))
                     curr_batch.edge_preds = torch.sigmoid(outputs['classified_edges'][-1].view(-1).detach())
 
                     if mode == 'val':
@@ -633,7 +647,7 @@ class HICLTracker:
                                             tracker_sub_folder=self.config.mot_sub_folder, output_sub_folder=self.config.mot_sub_folder,
                                             text=self.val_dataset.text_dicts)[0]
                 self._log_tb_mot_metrics_on_wandb(mot_metrics)
-                # self._log_tb_mot_metrics(mot_metrics) 
+                self._log_tb_mot_metrics(mot_metrics) 
 
                 self._save_highest_hota_model(mot_metrics)
 
@@ -707,7 +721,7 @@ class HICLTracker:
                     graph_output_df = graph_df.copy()
                     graph_output_df['ped_id'] = ped_labels
                     graph_output_df['used'] = node_labels
-                    print(graph_output_df['used'])
+                    print("graph_output_df['used'] = \n", graph_output_df['used'])
                     # add(tracking_output, [start_frame, end_frame, text], graph_output_df)
                     graph_output_df = graph_output_df[graph_output_df['used'] > 0.5]
                     graph_output_df = graph_output_df[self.config.VIDEO_COLUMNS + ['conf', 'detection_id']].copy()
@@ -818,6 +832,8 @@ class HICLTracker:
                 left_df[['ped_id_pos']].join(right_df['ped_id_pos'], lsuffix='_left', rsuffix='_right').dropna(
                     thresh=2).reset_index().groupby(['ped_id_pos_left', 'ped_id_pos_right'])['detection_id'].count()
             common_boxes = common_boxes.reset_index().astype(int)
+            if len(common_boxes) == 0:
+                continue
 
             # Create a cost matrix with negative count (more match, less cost). Everywhere else is NaN
             cost_mat = np.full((common_boxes['ped_id_pos_left'].max() + 1, common_boxes['ped_id_pos_right'].max() + 1),
@@ -1022,45 +1038,18 @@ class FocalLoss(nn.Module):
         else:
             return F_loss
         
+class ContrastiveLoss(nn.Module):
+    def __init__(self, margin=1.0, pos_weight=1.0, neg_weight=1.0):
+        super(ContrastiveLoss, self).__init__()
+        self.margin = margin
+        self.pos_weight = pos_weight
+        self.neg_weight = neg_weight
 
-class NTXentLoss(nn.Module):
-    """
-    Compute the NT-Xent loss for text and node embeddings with multiple positive pairs.
+    def forward(self, text_embeds, image_embeds, labels):
+        distances = F.pairwise_distance(text_embeds, image_embeds)  # shape: (batch_size,)
 
-    Args:
-        text_embeddings (torch.Tensor): Embeddings of 1 text, shape (num_nodes, embedding_dim).
-        node_embeddings (torch.Tensor): Embeddings of the nodes, shape (num_nodes, embedding_dim).
-        positive_pairs (list): List of boolean indicating positive pairs.
-        temperature (float): Temperature parameter for scaling the logits.
+        pos_loss = self.pos_weight * labels * torch.pow(distances, 2)
+        neg_loss = self.neg_weight * (1 - labels) * torch.pow(torch.clamp(self.margin - distances, min=0.0), 2)
+        loss = torch.mean(pos_loss + neg_loss)
 
-    Returns:
-        torch.Tensor: The computed NT-Xent loss.
-    """
-    def __init__(self, temperature=0.5):
-        super(NTXentLoss, self).__init__()
-        self.temperature = temperature
-
-    def forward(self, text_embeddings, node_embeddings, positive_pairs):        
-        # Compute the similarity matrix between text and node embeddings
-        sim_matrix = F.cosine_similarity(text_embeddings, node_embeddings, dim=1)
-        sim_matrix = sim_matrix / self.temperature  # Scale by temperature
-        
-        # Create a mask for positive pairs
-        positive_mask = positive_pairs.bool()
-        
-        # Compute the logits for positive pairs
-        positive_logits = sim_matrix[positive_mask]
-        
-        # Compute the logits for negative pairs
-        negative_logits = sim_matrix[~positive_mask]
-        
-        # Compute the numerator (sum of exp for positive pairs)
-        numerator = torch.exp(positive_logits).sum()
-        
-        # Compute the denominator (sum of exp for all pairs)
-        denominator = torch.exp(sim_matrix).sum()
-        
-        # Compute the NT-Xent loss
-        loss = -torch.log(numerator / denominator)
-        
         return loss

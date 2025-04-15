@@ -222,6 +222,26 @@ class HiclFeatsEncoder(nn.Module):
 
         return latent_node_feats    
 
+class CrossAttention(nn.Module):
+    def __init__(self, embed_dim=32, num_heads=8):
+        super().__init__()
+        self.cross_attention = nn.MultiheadAttention(embed_dim, num_heads)
+        self.ff = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 2),
+            nn.ReLU(),                  
+            nn.Linear(embed_dim * 2, embed_dim)  
+        )
+
+    def forward(self, text_features, bbox_features):
+        attn_output, _ = self.cross_attention(
+            query=text_features.unsqueeze(1).transpose(0, 1),  # Query: text embeddings
+            key=bbox_features.unsqueeze(1).transpose(0, 1),    # Key: node embeddings
+            value=bbox_features.unsqueeze(1).transpose(0, 1)   # Value: node embeddings
+        )
+        attn_output = attn_output.transpose(0, 1).squeeze(1)
+        attn_output = self.ff(attn_output)  
+        return attn_output
+
 
 class MOTMPNet(nn.Module):
     """
@@ -262,21 +282,15 @@ class MOTMPNet(nn.Module):
 
         classifier_feats_dict = model_params['classifier_feats_dict']
         node_classifier_feats_dict = model_params['node_classifier_feats_dict']
+        text_encoder_feats_dict = model_params['text_encoder_feats_dict']
 
         self.encoder = MLPGraphIndependent(**encoder_feats_dict)
+        self.text_encoder = MLPGraphIndependent(**text_encoder_feats_dict)
+
         self.classifier = MLPGraphIndependent(**classifier_feats_dict)
         self.node_classifier = MLPGraphIndependent(**node_classifier_feats_dict)
 
-        self.x_compressor = nn.Linear(in_features=2048, out_features=512)
-        self.text_fuser = nn.Sequential(
-            nn.Linear(in_features=2560, out_features=1024),
-            nn.ReLU(),
-            nn.Linear(in_features=1024, out_features=512),
-            nn.ReLU(),
-            nn.Linear(in_features=512, out_features=512)
-        )
-        # self.text_fuser = nn.Linear(in_features=2560, out_features=512)
-        self.cross_attention = nn.MultiheadAttention(embed_dim=512, num_heads=32)
+        self.cross_attention = CrossAttention()
 
         # Define the 'Core' message passing network (i.e. node and edge update models)
         self.MPNet = self._build_core_MPNet(model_params=model_params, encoder_feats_dict=encoder_feats_dict)
@@ -374,9 +388,7 @@ class MOTMPNet(nn.Module):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         x_text, x_node_clip = data.x_text, data.x_node_clip
 
-        if data.curr_depth == 0:
-            att_x = self.x_compressor(x)
-            fused_x_text = self.text_fuser(torch.cat((x, x_text), dim=1))
+        _, x_text = self.text_encoder(nodes_feats=x_text)
 
         x_is_img = len(x.shape) == 4
         if self.node_cnn is not None and x_is_img:
@@ -418,7 +430,7 @@ class MOTMPNet(nn.Module):
         # During training, the feature vectors that the MPNetwork outputs for the  last self.num_class_steps message
         # passing steps are classified in order to compute the loss.
         first_class_step = self.num_enc_steps - self.num_class_steps + 1
-        outputs_dict = {'classified_edges': [], 'classified_nodes': [],}
+        outputs_dict = {'classified_edges': [], 'node_feats': [], 'x_text': x_text}
         for step in range(1, self.num_enc_steps + 1):
 
             # Reattach the initially encoded embeddings before the update
@@ -435,21 +447,8 @@ class MOTMPNet(nn.Module):
                 dec_edge_feats, _ = self.classifier(latent_edge_feats)
                 outputs_dict['classified_edges'].append(dec_edge_feats)
         
-        if data.curr_depth == 0:
-            # print('---------')
-            # print("att_x = \n", att_x, att_x.shape)
-            # print("fused_x_text = \n", fused_x_text, fused_x_text.shape)
-            attn_output, _ = self.cross_attention(
-                query=att_x.unsqueeze(1).transpose(0, 1),  # Query: node embeddings
-                key=fused_x_text.unsqueeze(1).transpose(0, 1),    # Key: text embeddings
-                value=fused_x_text.unsqueeze(1).transpose(0, 1)   # Value: text embeddings
-            )
-            # print("attn_output = \n", attn_output, attn_output.shape)
-            attn_output = attn_output.transpose(0, 1)
-            attn_output = attn_output.squeeze(1)
-            _, dec_node_feats = self.node_classifier(nodes_feats=attn_output)
-            # print("dec_node_feats = \n", dec_node_feats.view(-1), dec_node_feats.shape)
-            outputs_dict['classified_nodes'].append(dec_node_feats)
+                if data.curr_depth == 0:
+                    outputs_dict['node_feats'].append(latent_node_feats)
 
         if self.num_enc_steps == 0:
             dec_edge_feats, _ = self.classifier(latent_edge_feats)

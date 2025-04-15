@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from configs import mot17_config, kitti_config, refer_kitti_config
+from configs import mot17_config, kitti_config, refer_kitti_config, refer_dance_config
 from src.utils.deterministic import make_deterministic
 from src.tracker.hicl_tracker import HICLTracker
 from src.data.splits import get_seqs_from_splits
@@ -9,16 +9,22 @@ import os.path as osp
 from TrackEval.scripts.run_mot_challenge import evaluate_mot17
 from TrackEval.scripts.run_kitti import evaluate_kitti
 from TrackEval.scripts.run_refer_kitti import evaluate_refer_kitti
+from TrackEval.scripts.run_refer_dance import evaluate_refer_dance
 import wandb
 
-_EVAL_FUNC = {'mot17': evaluate_mot17, 'kitti': evaluate_kitti, 'refer': evaluate_refer_kitti}
-_CONFIG_FILE = {'mot17': mot17_config, 'kitti': kitti_config, 'refer': refer_kitti_config}
+_RUN_IDS = {'mot17': (evaluate_mot17, mot17_config),
+            'kitti': (evaluate_kitti, kitti_config),
+            'refer_kitti': (evaluate_refer_kitti, refer_kitti_config),
+            'refer_dance': (evaluate_refer_dance, refer_dance_config),
+            }
 
 if __name__ == "__main__":
     run_id = os.getenv('RUN')
-    config = _CONFIG_FILE[run_id[:5]].get_arguments()
+    for i in _RUN_IDS:
+        if run_id.startswith(i):
+            eval_func, config = _RUN_IDS[i]
+            config = config.get_arguments()
     make_deterministic(config.seed)  # Make the experiment deterministic
-    eval_func = _EVAL_FUNC[config.run_id[:5]]
 
     # # Print the config and experiment id
     # print("Experiment ID:", config.experiment_path)
@@ -46,10 +52,10 @@ if __name__ == "__main__":
         # Initialize the tracker
 
         # Train the tracker
-        hicl_tracker = HICLTracker(config=config, seqs=seqs, splits=splits)
-        # if config.load_train_ckpt:
-        #     print("Loading checkpoint from ", config.hicl_model_path)
-        #     hicl_tracker.model = hicl_tracker.load_pretrained_model()
+        hicl_tracker = HICLTracker(config=config, seqs=seqs, splits=splits, run_id=run_id)
+        if config.load_train_ckpt:
+            print("Loading checkpoint from ", config.hicl_model_path)
+            hicl_tracker.model = hicl_tracker.load_pretrained_model()
         hicl_tracker.train()
 
     # TESTING

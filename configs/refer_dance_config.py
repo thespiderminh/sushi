@@ -56,20 +56,20 @@ def get_arguments(args=None):
     parser.add_argument('--output_path', help='Where is the output folder?', type=str,
                         default='/data/hpc/ngocminh/SUSHI/output')
 
-    parser.set_defaults(mot_sub_folder='kitti_files')  # Tracker output for sequences will be stored here
+    parser.set_defaults(mot_sub_folder='dance_files')  # Tracker output for sequences will be stored here
 
     # SEED
     parser.add_argument('--seed', help='Seed of the experiment', type=int, default=0)
 
     # DEVICE SPECS
     parser.add_argument('--cuda', help='Run on gpu', dest='cuda', type=int, default=-1)
-    parser.add_argument('--num_workers', help='Number of workers', type=int, default=4)
+    parser.add_argument('--num_workers', help='Number of workers', type=int, default=2)
 
     # SPLITS
     parser.add_argument('--train_splits', type=str, nargs='*', help='Training split', default=[None])
     parser.add_argument('--val_splits', type=str, nargs='*', help='Validation split', default=[None])
     parser.add_argument('--test_splits', type=str, nargs='*', help='Test split', default=[None])
-    parser.add_argument('--cval_seqs', help='All range that crossvalidation covers (e.g all train seqs)', type=str, default='refer-kitti-train-all')
+    parser.add_argument('--cval_seqs', help='All range that crossvalidation covers (e.g all train seqs)', type=str, default='refer-dance-train-all')
 
     # DETECTIONS
     parser.add_argument('--det_file', help='Detection file to use', type=str, default='det')
@@ -116,9 +116,9 @@ def get_arguments(args=None):
 
     # TRAINING
     parser.add_argument('--num_epoch', help='Number of epochs for training', type=int, default=20)
-    parser.add_argument('--num_batch', help='Number of graphs per mot_sub_folder', type=int, default=6) # 13458
+    parser.add_argument('--num_batch', help='Number of graphs per mot_sub_folder', type=int, default=3) # 6516 
     parser.add_argument('--lr', help='Learning rate', type=float, default=0.001)  # MPNTrack param
-    parser.add_argument('--gamma', help='Focal loss gamma parameter', type=float, default=3)
+    parser.add_argument('--gamma', help='Focal loss gamma parameter', type=float, default=1)
     parser.add_argument('--weight_decay', help='Weight decay', type=float, default=0.0001)  # MPNTrack param
     parser.add_argument('--augmentation', help='Perform data augmentation during training', dest='augmentation', action='store_true')
     parser.add_argument('--train_dataset_frame_overlap', help='Most frames to overlap for different datapoints', type=int, default=20)
@@ -154,8 +154,8 @@ def get_arguments(args=None):
     parser.add_argument('--hicl_depth', help='The depth of the hierarchical architecture', type=int, default=9)
     parser.add_argument('--node_id_min_ratio', help='Min percentage of the most common id for hicl layers gt assignment', type=float, default=0.5)
     parser.add_argument('--depth_pretrain_iteration', help='Number of iterations before unlocking next level', type=int,
-                        default=747) # 6
-                        # default=560) # 8
+                        # default=1086) # 2
+                        default=724) # 3
 
     # MOTION SETTING
     parser.add_argument('--motion_max_length', type=int, nargs='*', help='Maximum number of frames used to encode trajectories before pred at each layer', default=[2, 4, 8, 16, 32, 64, 128, 256])
@@ -179,7 +179,7 @@ def get_arguments(args=None):
     parser.add_argument('--mpn_use_pos_edge', type=_store_bool, nargs='*', default=[True]*9)
 
     # VERBOSE
-    parser.set_defaults(verbose_iteration=100)
+    parser.set_defaults(verbose_iteration=200)
 
     # EXPERIMENT EVAL
     parser.add_argument('--old_experiments', type=str, nargs='*', help='Experiment files to merge', default=[None])
@@ -200,8 +200,8 @@ def post_config(config):
     config = create_experiment_path(config)
 
     # Dataframe Columns to keep in order to produce a tracking output
-    config.VIDEO_COLUMNS = ['frame_path', 'frame', 'name', 'truncation', 'occlusion', 'direction', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'bb_right', 'bb_bot']  # Columns to save in the output df
-    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'name', 'truncation', 'occlusion', 'direction', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'conf', 'x', 'y', 'z']  # MotCha output format
+    config.VIDEO_COLUMNS = ['frame_path', 'frame', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'bb_right', 'bb_bot']  # Columns to save in the output df
+    config.TRACKING_OUT_COLS = ['frame', 'ped_id', 'bb_left', 'bb_top', 'bb_width', 'bb_height']  # MotCha output format
 
     # Motion things
     config.do_motion = max(config.mpn_use_motion)

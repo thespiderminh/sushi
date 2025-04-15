@@ -1,4 +1,5 @@
 import os.path as osp
+import os
 
 
 def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split=None):
@@ -88,6 +89,18 @@ def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split
     _SPLITS['refer-kitti-val-split2'] = {'KITTI/training/image_02': [f'refer-00{seq_num:02}' for seq_num in (0,)]}
 
 
+    ########
+    # Refer-Dancetrack
+    ########
+    videos_path = 'datasets/REFER-DANCE/videos'
+    train_videos = sorted(os.listdir(osp.join(videos_path, 'train')))
+    val_videos = sorted(os.listdir(osp.join(videos_path, 'val')))
+    _SPLITS['refer-dance-train-all'] = {'REFER-DANCE/DanceTrack/training/image_02': [f'refer-{seq[:-4]}' for seq in train_videos]}
+    _SPLITS['refer-dance-val-all'] = {'REFER-DANCE/DanceTrack/training/image_02': [f'refer-{seq[:-4]}' for seq in val_videos]}
+    _SPLITS['refer-dance-train-split1'] = {'REFER-DANCE/DanceTrack/training/image_02': [f'refer-dancetrack00{seq:02}' for seq in (1, 2, 6)]}
+    _SPLITS['refer-dance-val-split1'] = {'REFER-DANCE/DanceTrack/training/image_02': [f'refer-dancetrack00{seq:02}' for seq in (4,)]}
+
+
     # Ensure that split is valid
     assert train_split in _SPLITS.keys() or train_split is None, "Training split is not valid!"
     assert val_split in _SPLITS.keys() or val_split is None, "Validation split is not valid!"
@@ -105,3 +118,12 @@ def get_seqs_from_splits(data_path, train_split=None, val_split=None, test_split
         seqs['test'] = {osp.join(data_path, seqs_path): seq_list for seqs_path, seq_list in
                         _SPLITS[test_split].items()}
     return seqs, (train_split, val_split, test_split)
+
+
+if __name__ == "__main__":
+    seqs, splits = get_seqs_from_splits("/data/hpc/ngocminh/SUSHI/datasets", train_split='refer-dance-train-all', val_split='refer-dance-val-all', )
+    train_split, val_split, test_split = splits
+    for a, b in seqs.items():
+        print(a)
+        print(b)
+        print()
